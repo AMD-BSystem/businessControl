@@ -162,6 +162,7 @@
     <div class="actions">
       <span class="mono small" id="msAccountChip" style="display:none; color:#8fd6b0;"></span>
       <button class="btn btn-ghost" id="btnMsLogin">Iniciar sesión con Microsoft</button>
+      <button class="btn btn-ghost" id="btnRecargarExcel" style="display:none;">Buscar/recargar Excel</button>
       <button class="btn btn-ghost" id="btnMsLogout" style="display:none;">Cerrar sesión</button>
       <button class="btn btn-primary" id="btnSave" disabled>Guardar cambios</button>
     </div>
@@ -590,17 +591,21 @@ function actualizarUILogin(){
   const chip = document.getElementById("msAccountChip");
   const btnLogin = document.getElementById("btnMsLogin");
   const btnLogout = document.getElementById("btnMsLogout");
+  const btnRecargar = document.getElementById("btnRecargarExcel");
   if(cuentaActiva){
     chip.textContent = cuentaActiva.username;
     chip.style.display = "inline-flex";
     btnLogin.style.display = "none";
     btnLogout.style.display = "inline-flex";
+    btnRecargar.style.display = "inline-flex";
   } else {
     chip.style.display = "none";
     btnLogin.style.display = "inline-flex";
     btnLogout.style.display = "none";
+    btnRecargar.style.display = "none";
   }
 }
+document.getElementById("btnRecargarExcel").addEventListener("click", cargarExcelDesdeOneDrive);
 async function iniciarSesionMicrosoft(){
   try{
     await msalListo;
@@ -688,7 +693,7 @@ async function cargarExcelDesdeOneDrive(){
     showToast("Buscando "+EXCEL_FILENAME+" en OneDrive...");
     const ref = await buscarArchivoExcel();
     if(!ref){
-      showToast("No se encontró "+EXCEL_FILENAME+" en tu OneDrive ni en lo compartido contigo.", true);
+      alert("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\nVerifica: 1) que el archivo se llame exactamente así, 2) que esté compartido con esta cuenta ("+cuentaActiva.username+") con permiso de edición.");
       return;
     }
     excelFileRef = ref;
@@ -710,7 +715,7 @@ async function cargarExcelDesdeOneDrive(){
     showToast("Excel cargado desde OneDrive: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
   }catch(err){
     console.error(err);
-    showToast("No se pudo cargar el Excel desde OneDrive", true);
+    alert("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
   }
 }
 async function guardarExcelEnOneDrive(){
