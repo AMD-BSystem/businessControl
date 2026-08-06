@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@4.30.0/lib/msal-browser.min.js"></script>
 <style>
   :root{
     --navy-950:#041629; --navy-900:#0b2545; --navy-800:#0f172a; --navy-700:#123a63;
@@ -157,11 +158,11 @@
 <div id="shell">
   <div id="topbar">
     <div class="brand"><span class="dot"></span> Control de Cotizaciones</div>
-    <div class="file-status" id="fileStatus">Sin archivo cargado</div>
+    <div class="file-status" id="fileStatus">Sin sesión de Microsoft</div>
     <div class="actions">
-      <input type="file" id="fileInput" accept=".xlsx" style="display:none">
-      <button class="btn btn-ghost" id="btnReconectar" style="display:none;">Reconectar archivo recordado</button>
-      <button class="btn btn-ghost" id="btnOpen">Abrir Excel</button>
+      <span class="mono small" id="msAccountChip" style="display:none; color:#8fd6b0;"></span>
+      <button class="btn btn-ghost" id="btnMsLogin">Iniciar sesión con Microsoft</button>
+      <button class="btn btn-ghost" id="btnMsLogout" style="display:none;">Cerrar sesión</button>
       <button class="btn btn-primary" id="btnSave" disabled>Guardar cambios</button>
     </div>
   </div>
@@ -257,14 +258,11 @@
       <h1 class="page-title">Configuración</h1>
       <p class="page-sub">Datos que se usan al generar la propuesta en PDF. Se guardan dentro del mismo Excel.</p>
       <div class="card">
-        <h3>Conexión recordada en este dispositivo</h3>
-        <p class="small muted" style="margin:0 0 10px;">La app recuerda el último Excel y la última carpeta de cotizaciones que usaste <strong>en este navegador/dispositivo</strong>, para no tener que reconectar cada vez que abres la app. Disponible en Chrome/Edge abriendo el archivo directo en el navegador (no dentro de la vista previa de Claude).</p>
-        <div class="kv"><span class="k">Excel recordado</span><span class="v mono" id="cfgExcelRecordadoLabel">Ninguno</span></div>
-        <div class="kv"><span class="k">Carpeta de PDFs recordada</span><span class="v mono" id="cfgFolderRecordadoLabel">Ninguna</span></div>
-        <div class="flex-between" style="margin-top:10px;">
-          <span class="small muted">Si vas a usar este dispositivo con otro archivo/carpeta, olvida la conexión primero.</span>
-          <button class="btn btn-outline btn-sm" id="btnOlvidarConexion">Olvidar conexión recordada</button>
-        </div>
+        <h3>Sesión de Microsoft (OneDrive)</h3>
+        <p class="small muted" style="margin:0 0 10px;">La app se conecta a tu Excel guardado en OneDrive usando tu cuenta de Microsoft autorizada. La sesión se recuerda sola en este dispositivo/navegador — no hace falta iniciar sesión cada vez que abres la app.</p>
+        <div class="kv"><span class="k">Cuenta conectada</span><span class="v mono" id="cfgMsAccountLabel">Ninguna</span></div>
+        <div class="kv"><span class="k">Archivo conectado</span><span class="v mono" id="cfgMsFileLabel">Ninguno</span></div>
+        <div class="kv"><span class="k">Carpeta de PDFs recordada (local)</span><span class="v mono" id="cfgFolderRecordadoLabel">Ninguna</span></div>
       </div>
       <div class="card">
         <h3>Carpeta donde guardar los PDF de propuestas</h3>
@@ -505,15 +503,14 @@ let state = {
   gastos: [],
   config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
 };
-let fileHandle = null;
 let loadedFileName = null;
-let loadedFileLastModified = null;
 let currentCR = null;
 let pdfDirHandle = null;
 
 /* =========================================================================
-   RECORDAR CONEXIÓN (IndexedDB) — para no reconectar Excel/carpeta cada vez
-   que se abre la app en este mismo dispositivo/navegador.
+   RECORDAR CARPETA DE PDFS (IndexedDB) — solo la carpeta local donde se
+   guardan los PDF de propuestas. La conexión al Excel ahora vive en la
+   sesión de Microsoft (ver bloque MSAL más abajo), que se recuerda sola.
    ========================================================================= */
 const CONN_DB = "ccApp_conexion";
 const CONN_STORE = "handles";
@@ -546,44 +543,8 @@ async function conn_get(key){
     });
   }catch(err){ return null; }
 }
-async function conn_del(key){
-  try{
-    const db = await conn_open();
-    await new Promise((resolve,reject)=>{
-      const tx = db.transaction(CONN_STORE,"readwrite");
-      tx.objectStore(CONN_STORE).delete(key);
-      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
-    });
-  }catch(err){ /* nada que hacer */ }
-}
-async function verificarPermiso(handle, modo){
-  const opts = {mode:modo};
-  try{
-    if((await handle.queryPermission(opts))==="granted") return true;
-    if((await handle.requestPermission(opts))==="granted") return true;
-  }catch(err){ /* handle inválido / navegador no soporta */ }
-  return false;
-}
-let excelRecordadoPendiente = null; // handle guardado que necesita un click (gesto de usuario) para pedir permiso
 async function intentarReconectarAuto(){
-  if(!window.showOpenFilePicker) return; // API no soportada (ej. fuera de Chrome/Edge)
-  const savedExcel = await conn_get("excelHandle");
-  if(savedExcel){
-    try{
-      const permGranted = (await savedExcel.queryPermission({mode:"readwrite"}))==="granted";
-      if(permGranted){
-        fileHandle = savedExcel;
-        const file = await fileHandle.getFile();
-        await cargarArchivo(file);
-      } else {
-        excelRecordadoPendiente = savedExcel;
-        const nombre = savedExcel.name || "archivo recordado";
-        const btn = document.getElementById("btnReconectar");
-        btn.textContent = "Reconectar: "+nombre;
-        btn.style.display = "inline-flex";
-      }
-    }catch(err){ console.warn("No se pudo reconectar el Excel recordado", err); }
-  }
+  if(!window.showDirectoryPicker) return; // API no soportada (ej. fuera de Chrome/Edge)
   const savedDir = await conn_get("pdfDirHandle");
   if(savedDir){
     try{
@@ -595,21 +556,222 @@ async function intentarReconectarAuto(){
     }catch(err){ console.warn("No se pudo reconectar la carpeta recordada", err); }
   }
 }
-document.getElementById("btnReconectar").addEventListener("click", async ()=>{
-  if(!excelRecordadoPendiente) return;
-  const ok = await verificarPermiso(excelRecordadoPendiente, "readwrite");
-  if(!ok){ showToast("No se concedió permiso para reabrir el archivo recordado", true); return; }
-  fileHandle = excelRecordadoPendiente;
-  const file = await fileHandle.getFile();
-  await cargarArchivo(file);
-  document.getElementById("btnReconectar").style.display = "none";
+
+/* =========================================================================
+   LOGIN CON MICROSOFT (MSAL) + EXCEL EN ONEDRIVE VÍA MICROSOFT GRAPH
+   El Excel real vive en el OneDrive de amd_laser_qro, compartido con
+   amd_servicio. Cualquiera de las dos cuentas puede leer/escribir el mismo
+   archivo. La sesión se recuerda sola (localStorage de MSAL) en cada
+   dispositivo — no hace falta iniciar sesión cada vez que se abre la app.
+   ========================================================================= */
+const MSAL_CLIENT_ID = "be752399-69eb-429c-a3bb-a9cf21e1365c";
+const MSAL_AUTHORITY = "https://login.microsoftonline.com/consumers";
+const MSAL_SCOPES = ["User.Read", "Files.ReadWrite"];
+const CUENTAS_AUTORIZADAS = ["amd_laser_qro@outlook.com", "amd_servicio@outlook.com"];
+const EXCEL_FILENAME = "Control_Cotizaciones.xlsx";
+
+const msalInstance = new msal.PublicClientApplication({
+  auth: {
+    clientId: MSAL_CLIENT_ID,
+    authority: MSAL_AUTHORITY,
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 });
-document.getElementById("btnOlvidarConexion").addEventListener("click", async ()=>{
-  await conn_del("excelHandle");
-  await conn_del("pdfDirHandle");
-  showToast("Conexión recordada olvidada en este dispositivo");
-  renderConfig();
-});
+const msalListo = msalInstance.initialize(); // se dispara una sola vez; todo lo demás lo espera
+
+let cuentaActiva = null;
+let excelFileRef = null; // {driveId, itemId, lastModifiedDateTime}
+
+function cuentaAutorizada(username){
+  return CUENTAS_AUTORIZADAS.includes((username||"").toLowerCase());
+}
+function actualizarUILogin(){
+  const chip = document.getElementById("msAccountChip");
+  const btnLogin = document.getElementById("btnMsLogin");
+  const btnLogout = document.getElementById("btnMsLogout");
+  if(cuentaActiva){
+    chip.textContent = cuentaActiva.username;
+    chip.style.display = "inline-flex";
+    btnLogin.style.display = "none";
+    btnLogout.style.display = "inline-flex";
+  } else {
+    chip.style.display = "none";
+    btnLogin.style.display = "inline-flex";
+    btnLogout.style.display = "none";
+  }
+}
+async function iniciarSesionMicrosoft(){
+  try{
+    await msalListo;
+    await msalInstance.loginRedirect({ scopes: MSAL_SCOPES });
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo iniciar sesión con Microsoft", true);
+  }
+}
+async function cerrarSesionMicrosoft(){
+  const account = cuentaActiva;
+  cuentaActiva = null; excelFileRef = null;
+  document.getElementById("fileStatus").textContent = "Sin sesión de Microsoft";
+  document.getElementById("fileStatus").classList.remove("connected");
+  document.getElementById("btnSave").disabled = true;
+  actualizarUILogin();
+  try{ await msalListo; await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
+}
+async function obtenerTokenGraph(){
+  if(!cuentaActiva) return null;
+  try{
+    await msalListo;
+    const res = await msalInstance.acquireTokenSilent({ scopes: MSAL_SCOPES, account: cuentaActiva });
+    return res.accessToken;
+  }catch(err){
+    try{ await msalInstance.acquireTokenRedirect({ scopes: MSAL_SCOPES, account: cuentaActiva }); }
+    catch(err2){ console.error(err2); }
+    return null;
+  }
+}
+async function graphFetch(path, options){
+  const token = await obtenerTokenGraph();
+  if(!token) throw new Error("Sin token de Microsoft Graph");
+  const res = await fetch("https://graph.microsoft.com/v1.0"+path, {
+    ...(options||{}),
+    headers: { ...((options&&options.headers)||{}), "Authorization": "Bearer "+token }
+  });
+  if(!res.ok){
+    const txt = await res.text().catch(()=>"");
+    throw new Error("Graph "+res.status+": "+txt);
+  }
+  return res;
+}
+async function buscarEnCarpetaCompartida(driveId, itemId, profundidad){
+  if(profundidad>3) return null; // evita recursión infinita en carpetas muy anidadas
+  try{
+    const res = await graphFetch(`/drives/${driveId}/items/${itemId}/children`);
+    const data = await res.json();
+    for(const child of (data.value||[])){
+      if(child.name===EXCEL_FILENAME && child.file) return { driveId, itemId: child.id };
+      if(child.folder){
+        const found = await buscarEnCarpetaCompartida(driveId, child.id, profundidad+1);
+        if(found) return found;
+      }
+    }
+  }catch(err){ console.warn("Error explorando carpeta compartida", err); }
+  return null;
+}
+async function buscarArchivoExcel(){
+  // 1) Buscar en el propio OneDrive (funciona para la cuenta dueña del archivo)
+  try{
+    const res = await graphFetch(`/me/drive/root/search(q='${encodeURIComponent(EXCEL_FILENAME)}')`);
+    const data = await res.json();
+    const match = (data.value||[]).find(it=>it.name===EXCEL_FILENAME && it.file);
+    if(match) return { driveId: match.parentReference.driveId, itemId: match.id };
+  }catch(err){ console.warn("Búsqueda en drive propio falló", err); }
+  // 2) Buscar en "Compartido conmigo" (archivo directo, o dentro de una carpeta compartida)
+  try{
+    const res = await graphFetch(`/me/drive/sharedWithMe`);
+    const data = await res.json();
+    for(const it of (data.value||[])){
+      const remote = it.remoteItem;
+      if(!remote) continue;
+      if(remote.name===EXCEL_FILENAME && remote.file) return { driveId: remote.parentReference.driveId, itemId: remote.id };
+      if(remote.folder){
+        const found = await buscarEnCarpetaCompartida(remote.parentReference.driveId, remote.id, 0);
+        if(found) return found;
+      }
+    }
+  }catch(err){ console.warn("Búsqueda en compartido conmigo falló", err); }
+  return null;
+}
+async function cargarExcelDesdeOneDrive(){
+  try{
+    showToast("Buscando "+EXCEL_FILENAME+" en OneDrive...");
+    const ref = await buscarArchivoExcel();
+    if(!ref){
+      showToast("No se encontró "+EXCEL_FILENAME+" en tu OneDrive ni en lo compartido contigo.", true);
+      return;
+    }
+    excelFileRef = ref;
+    const metaRes = await graphFetch(`/drives/${ref.driveId}/items/${ref.itemId}`);
+    const meta = await metaRes.json();
+    excelFileRef.lastModifiedDateTime = meta.lastModifiedDateTime;
+    const contentRes = await graphFetch(`/drives/${ref.driveId}/items/${ref.itemId}/content`);
+    const buf = await contentRes.arrayBuffer();
+    const wb = XLSX.read(buf, {type:"array", cellDates:false});
+    importarWorkbook(wb);
+    loadedFileName = EXCEL_FILENAME;
+    document.getElementById("fileStatus").textContent = "Conectado: "+cuentaActiva.username;
+    document.getElementById("fileStatus").classList.add("connected");
+    document.getElementById("btnSave").disabled = false;
+    isDirty = false;
+    currentCR = null;
+    render();
+    goto("dashboard");
+    showToast("Excel cargado desde OneDrive: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo cargar el Excel desde OneDrive", true);
+  }
+}
+async function guardarExcelEnOneDrive(){
+  if(!excelFileRef){ showToast("No hay un archivo de OneDrive conectado", true); return; }
+  try{
+    const metaRes = await graphFetch(`/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}`);
+    const meta = await metaRes.json();
+    if(excelFileRef.lastModifiedDateTime && meta.lastModifiedDateTime !== excelFileRef.lastModifiedDateTime){
+      const continuar = confirm(
+        "El archivo Excel cambió en OneDrive desde que lo cargaste (probablemente se guardó desde el otro dispositivo).\n\n"+
+        "Si guardas ahora, tus cambios en pantalla sobrescribirán esa versión más reciente.\n\n"+
+        "¿Deseas continuar y sobrescribir de todas formas? Cancela para recargar primero."
+      );
+      if(!continuar) return;
+    }
+  }catch(err){ /* si no se puede verificar, seguimos con el guardado normal */ }
+  try{
+    const wb = exportarWorkbook();
+    const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+    const blob = new Blob([wbout], {type:"application/octet-stream"});
+    const token = await obtenerTokenGraph();
+    const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}/content`, {
+      method: "PUT",
+      headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+      body: blob
+    });
+    if(!res.ok) throw new Error("Graph PUT "+res.status);
+    const updated = await res.json();
+    excelFileRef.lastModifiedDateTime = updated.lastModifiedDateTime;
+    isDirty = false; document.getElementById("btnSave").disabled = true;
+    showToast("Guardado en OneDrive ("+cuentaActiva.username+")");
+  }catch(err){
+    console.error(err);
+    showToast("Ocurrió un error al guardar en OneDrive", true);
+  }
+}
+async function iniciarMsal(){
+  try{
+    await msalListo;
+    const resp = await msalInstance.handleRedirectPromise();
+    let account = (resp && resp.account) || msalInstance.getAllAccounts()[0] || null;
+    if(account && !cuentaAutorizada(account.username)){
+      showToast("Esta cuenta ("+account.username+") no está autorizada para usar esta app.", true);
+      try{ await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
+      return;
+    }
+    if(account){
+      cuentaActiva = account;
+      msalInstance.setActiveAccount(account);
+      actualizarUILogin();
+      await cargarExcelDesdeOneDrive();
+    } else {
+      actualizarUILogin();
+    }
+  }catch(err){
+    console.error(err);
+    showToast("Error iniciando sesión con Microsoft", true);
+  }
+}
+document.getElementById("btnMsLogin").addEventListener("click", iniciarSesionMicrosoft);
+document.getElementById("btnMsLogout").addEventListener("click", cerrarSesionMicrosoft);
 
 async function guardarPdfBlob(blob, filename){
   if(pdfDirHandle){
@@ -1072,7 +1234,8 @@ function renderConfig(){
   document.getElementById("cfg_formapago").value = state.config.formaPago||"";
   document.getElementById("cfg_condentrega").value = state.config.condicionEntrega||"";
   document.getElementById("cfg_condcom").value = state.config.condicionesComerciales||"";
-  document.getElementById("cfgExcelRecordadoLabel").textContent = loadedFileName ? loadedFileName : "Ninguno";
+  document.getElementById("cfgMsAccountLabel").textContent = (typeof cuentaActiva!=="undefined" && cuentaActiva) ? cuentaActiva.username : "Ninguna";
+  document.getElementById("cfgMsFileLabel").textContent = (typeof excelFileRef!=="undefined" && excelFileRef) ? EXCEL_FILENAME : "Ninguno";
   document.getElementById("cfgFolderRecordadoLabel").textContent = pdfDirHandle ? pdfDirHandle.name : "Ninguna";
 }
 document.getElementById("btnElegirCarpetaPdf").addEventListener("click", async ()=>{
@@ -1825,6 +1988,7 @@ function render(){
 }
 render();
 intentarReconectarAuto();
+iniciarMsal();
 
 /* =========================================================================
    EXCEL: LECTURA ROBUSTA POR NOMBRE DE ENCABEZADO
@@ -1847,47 +2011,6 @@ function col(row, map, ...nombres){
   return "";
 }
 
-document.getElementById("btnOpen").addEventListener("click", async ()=>{
-  if(window.showOpenFilePicker){
-    try{
-      const [handle] = await window.showOpenFilePicker({types:[{description:"Excel", accept:{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":[".xlsx"]}}]});
-      fileHandle = handle;
-      conn_set("excelHandle", handle);
-      document.getElementById("btnReconectar").style.display = "none";
-      const file = await handle.getFile();
-      await cargarArchivo(file);
-      return;
-    }catch(err){
-      if(err && err.name==="AbortError") return;
-    }
-  }
-  document.getElementById("fileInput").click();
-});
-document.getElementById("fileInput").addEventListener("change", async (e)=>{
-  const file = e.target.files[0];
-  if(file) await cargarArchivo(file);
-});
-
-async function cargarArchivo(file){
-  try{
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, {type:"array", cellDates:false});
-    importarWorkbook(wb);
-    loadedFileName = file.name;
-    loadedFileLastModified = file.lastModified;
-    document.getElementById("fileStatus").textContent = "Conectado: "+loadedFileName;
-    document.getElementById("fileStatus").classList.add("connected");
-    document.getElementById("btnSave").disabled = false;
-    isDirty = false;
-    currentCR = null;
-    render();
-    goto("dashboard");
-    showToast("Archivo cargado: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
-  }catch(err){
-    console.error(err);
-    showToast("No se pudo leer el archivo. Verifica que sea el Excel de Control de Cotizaciones.", true);
-  }
-}
 function excelSerialToISO(v){
   if(v===undefined||v===null||v==="") return "";
   if(typeof v==="string"){
@@ -2053,46 +2176,7 @@ function limpiarDatosResiduales(){
    EXCEL: GUARDAR
    ========================================================================= */
 document.getElementById("btnSave").addEventListener("click", async ()=>{
-  try{
-    if(fileHandle && fileHandle.createWritable){
-      try{
-        const actual = await fileHandle.getFile();
-        if(loadedFileLastModified && actual.lastModified !== loadedFileLastModified){
-          const continuar = confirm(
-            "El archivo Excel cambió en disco desde que lo cargaste (probablemente se guardó desde otro dispositivo).\n\n"+
-            "Si guardas ahora, tus cambios en pantalla sobrescribirán esa versión más reciente.\n\n"+
-            "¿Deseas continuar y sobrescribir de todas formas? Cancela para primero abrir el archivo de nuevo y revisar."
-          );
-          if(!continuar) return;
-        }
-      }catch(err){ /* si no se puede verificar, seguimos con el guardado normal */ }
-    }
-    const wb = exportarWorkbook();
-    const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
-    const blob = new Blob([wbout], {type:"application/octet-stream"});
-    if(fileHandle && fileHandle.createWritable){
-      try{
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        const actualizado = await fileHandle.getFile();
-        loadedFileLastModified = actualizado.lastModified;
-        isDirty = false; document.getElementById("btnSave").disabled = true;
-        showToast("Guardado directamente en "+loadedFileName);
-        return;
-      }catch(err){ /* si falla, caemos a la descarga */ }
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = loadedFileName || "Control_Cotizaciones.xlsx";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-    isDirty = false; document.getElementById("btnSave").disabled = true;
-    showToast("Archivo descargado. Reemplaza la versión en tu OneDrive.");
-  }catch(err){
-    console.error(err);
-    showToast("Ocurrió un error al guardar", true);
-  }
+  await guardarExcelEnOneDrive();
 });
 
 function exportarWorkbook(){
