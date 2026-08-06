@@ -649,51 +649,70 @@ async function graphFetch(path, options){
   }
   return res;
 }
-async function buscarEnCarpetaCompartida(driveId, itemId, profundidad){
-  if(profundidad>3) return null; // evita recursión infinita en carpetas muy anidadas
-  try{
-    const res = await graphFetch(`/drives/${driveId}/items/${itemId}/children`);
-    const data = await res.json();
-    for(const child of (data.value||[])){
-      if(child.name===EXCEL_FILENAME && child.file) return { driveId, itemId: child.id };
-      if(child.folder){
-        const found = await buscarEnCarpetaCompartida(driveId, child.id, profundidad+1);
-        if(found) return found;
-      }
+function nombreCoincide(nombre){
+  return (nombre||"").toLowerCase()===EXCEL_FILENAME.toLowerCase();
+}
+async function buscarEnDriveRecursivo(driveId, itemIdOrRoot, profundidad){
+  if(profundidad>4) return null; // evita recursión infinita en carpetas muy anidadas
+  const base = itemIdOrRoot==="root" ? `/drives/${driveId}/root/children` : `/drives/${driveId}/items/${itemIdOrRoot}/children`;
+  const res = await graphFetch(base);
+  const data = await res.json();
+  const directo = (data.value||[]).find(c=>c.file && nombreCoincide(c.name));
+  if(directo) return { driveId, itemId: directo.id };
+  for(const child of (data.value||[])){
+    if(child.folder){
+      const found = await buscarEnDriveRecursivo(driveId, child.id, profundidad+1);
+      if(found) return found;
     }
-  }catch(err){ console.warn("Error explorando carpeta compartida", err); }
+  }
   return null;
 }
 async function buscarArchivoExcel(){
-  // 1) Buscar en el propio OneDrive (funciona para la cuenta dueña del archivo)
+  const errores = [];
+  let miDriveId = null;
   try{
-    const res = await graphFetch(`/me/drive/root/search(q='${encodeURIComponent(EXCEL_FILENAME)}')`);
-    const data = await res.json();
-    const match = (data.value||[]).find(it=>it.name===EXCEL_FILENAME && it.file);
-    if(match) return { driveId: match.parentReference.driveId, itemId: match.id };
-  }catch(err){ console.warn("Búsqueda en drive propio falló", err); }
-  // 2) Buscar en "Compartido conmigo" (archivo directo, o dentro de una carpeta compartida)
+    const dRes = await graphFetch(`/me/drive`);
+    miDriveId = (await dRes.json()).id;
+  }catch(err){ errores.push("Leer tu OneDrive: "+err.message); }
+
+  if(miDriveId){
+    // 1) Búsqueda rápida (indice de OneDrive; puede tardar en detectar archivos recién subidos)
+    try{
+      const res = await graphFetch(`/me/drive/root/search(q='${encodeURIComponent(EXCEL_FILENAME)}')`);
+      const data = await res.json();
+      const match = (data.value||[]).find(it=>it.file && nombreCoincide(it.name));
+      if(match) return { ref: { driveId: match.parentReference.driveId, itemId: match.id } };
+    }catch(err){ errores.push("Búsqueda rápida en tu OneDrive: "+err.message); }
+    // 2) Recorrido directo de carpetas de tu propio OneDrive (no depende del índice de búsqueda)
+    try{
+      const found = await buscarEnDriveRecursivo(miDriveId, "root", 0);
+      if(found) return { ref: found };
+    }catch(err){ errores.push("Recorrido de carpetas en tu OneDrive: "+err.message); }
+  }
+  // 3) Buscar en "Compartido conmigo" (archivo directo, o dentro de una carpeta compartida)
   try{
     const res = await graphFetch(`/me/drive/sharedWithMe`);
     const data = await res.json();
     for(const it of (data.value||[])){
       const remote = it.remoteItem;
       if(!remote) continue;
-      if(remote.name===EXCEL_FILENAME && remote.file) return { driveId: remote.parentReference.driveId, itemId: remote.id };
+      if(remote.file && nombreCoincide(remote.name)) return { ref: { driveId: remote.parentReference.driveId, itemId: remote.id } };
       if(remote.folder){
-        const found = await buscarEnCarpetaCompartida(remote.parentReference.driveId, remote.id, 0);
-        if(found) return found;
+        const found = await buscarEnDriveRecursivo(remote.parentReference.driveId, remote.id, 0);
+        if(found) return { ref: found };
       }
     }
-  }catch(err){ console.warn("Búsqueda en compartido conmigo falló", err); }
-  return null;
+  }catch(err){ errores.push("Compartido conmigo: "+err.message); }
+  return { ref: null, errores };
 }
 async function cargarExcelDesdeOneDrive(){
   try{
     showToast("Buscando "+EXCEL_FILENAME+" en OneDrive...");
-    const ref = await buscarArchivoExcel();
+    const { ref, errores } = await buscarArchivoExcel();
     if(!ref){
-      alert("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\nVerifica: 1) que el archivo se llame exactamente así, 2) que esté compartido con esta cuenta ("+cuentaActiva.username+") con permiso de edición.");
+      alert("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\n"+
+        "Verifica: 1) que el archivo se llame exactamente así, 2) que esté compartido con esta cuenta ("+cuentaActiva.username+") con permiso de edición."+
+        (errores&&errores.length ? "\n\nDetalle técnico:\n"+errores.join("\n") : ""));
       return;
     }
     excelFileRef = ref;
