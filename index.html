@@ -753,7 +753,7 @@ async function iniciarMsal(){
     const resp = await msalInstance.handleRedirectPromise();
     let account = (resp && resp.account) || msalInstance.getAllAccounts()[0] || null;
     if(account && !cuentaAutorizada(account.username)){
-      showToast("Esta cuenta ("+account.username+") no está autorizada para usar esta app.", true);
+      alert("Esta cuenta no está autorizada para usar esta app.\n\nCorreo detectado por Microsoft: "+account.username+"\n\nSi esperabas que esta cuenta funcionara, avisa este correo exacto para agregarlo a la lista de autorizados.");
       try{ await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
       return;
     }
