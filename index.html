@@ -173,6 +173,7 @@
     <button class="nav-item active" data-view="dashboard"><span class="ic">&#9632;</span> Dashboard</button>
     <button class="nav-item" data-view="solicitudes"><span class="ic">&#9776;</span> Solicitudes (CR)</button>
     <button class="nav-item" data-view="clientes"><span class="ic">&#9737;</span> Clientes</button>
+    <button class="nav-item" data-view="proveedores"><span class="ic">&#128230;</span> Proveedores</button>
     <button class="nav-item" data-view="acciones"><span class="ic">&#10003;</span> Acciones pendientes</button>
     <button class="nav-item" data-view="gastos"><span class="ic">&#128176;</span> Gastos</button>
     <button class="nav-item" data-view="config"><span class="ic">&#9881;</span> Configuración</button>
@@ -222,6 +223,19 @@
       </div>
       <div class="card" style="padding:0;">
         <div id="clientesTableWrap"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-proveedores">
+      <div class="flex-between">
+        <div>
+          <h1 class="page-title">Proveedores</h1>
+          <p class="page-sub">Catálogo de proveedores: quién nos vende qué, y bajo qué marca.</p>
+        </div>
+        <button class="btn btn-primary" id="btnNuevoProveedor">+ Nuevo proveedor</button>
+      </div>
+      <div class="card" style="padding:0;">
+        <div id="proveedoresTableWrap"></div>
       </div>
     </div>
 
@@ -312,6 +326,14 @@
     <h2 id="clienteModalTitle">Nuevo cliente</h2>
     <p class="sub">Si la empresa ya existe pero es un contacto nuevo, captura la misma empresa: se generará un ID nuevo para ese contacto.</p>
     <div id="formCliente"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalProveedor">
+  <div class="modal">
+    <h2 id="proveedorModalTitle">Nuevo proveedor</h2>
+    <p class="sub">Catálogo de proveedores para tener a la mano quién nos vende qué.</p>
+    <div id="formProveedor"></div>
   </div>
 </div>
 
@@ -509,6 +531,7 @@ let state = {
   detalles: [],
   acciones: [],
   gastos: [],
+  proveedores: [],
   config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
 };
 let loadedFileName = null;
@@ -945,6 +968,12 @@ function nextClienteId(empresa){
   return pref+String(count+1).padStart(2,"0");
 }
 
+function nextProveedorId(nombreComercial){
+  const pref = "PR-"+letras3(nombreComercial);
+  const count = state.proveedores.filter(p=>p.id.toUpperCase().startsWith(pref)).length;
+  return pref+String(count+1).padStart(2,"0");
+}
+function proveedorById(id){ return state.proveedores.find(p=>p.id===id); }
 function clienteById(id){ return state.clientes.find(c=>c.id===id); }
 function detallesDe(cr){ return state.detalles.filter(d=>d.cr===cr); }
 function empresasUnicas(){ return [...new Set(state.clientes.map(c=>(c.empresa||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)); }
@@ -960,7 +989,9 @@ function precioFinalRenglon(d){ return costoTotalRenglon(d) * (1 + N(d.pctGananc
 function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return precioFinalRenglon(d)/cant; }
 function utilidadRenglon(d){ return precioFinalRenglon(d) - costoTotalRenglon(d); }
 function costoTotalFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0); }
-function utilidadFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0); }
+function gastosDeCR(cr){ return state.gastos.filter(g=>g.crAsignada===cr); }
+function gastosAsignadosTotal(cr){ return gastosDeCR(cr).reduce((s,g)=>s+N(g.costoTotal),0); }
+function utilidadFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0) - gastosAsignadosTotal(cr); }
 function gastoSubtotal(g){ return g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal); }
 function gastoIva(g){ return g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0; }
 function diasCreditoDe(folio){ const c = clienteById(folio.idCliente); return c ? N(c.diasCredito) : 0; }
@@ -1211,6 +1242,73 @@ function cerrarModales(){ document.querySelectorAll(".modal-bg").forEach(m=>m.cl
 document.querySelectorAll(".modal-bg").forEach(m=>m.addEventListener("click", (e)=>{ if(e.target===m) m.classList.remove("active"); }));
 
 /* =========================================================================
+   PROVEEDORES
+   ========================================================================= */
+function renderProveedores(){
+  const wrap = document.getElementById("proveedoresTableWrap");
+  if(state.proveedores.length===0){
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">&#128230;</div><h3>Sin proveedores registrados</h3><p>Agrega tu primer proveedor para tener su información a la mano.</p></div>`;
+    return;
+  }
+  const rows = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial)).map(p=>`
+    <tr data-id="${p.id}">
+      <td class="mono">${p.id}</td>
+      <td>${p.nombreComercial}</td>
+      <td>${p.contacto||"-"}</td>
+      <td>${p.telefono||"-"}</td>
+      <td>${p.correo||"-"}</td>
+      <td>${p.marcaPrincipal||"-"}</td>
+      <td class="right"><button class="btn btn-outline btn-sm" data-editprov="${p.id}">Editar</button></td>
+    </tr>`).join("");
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Nombre comercial</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>Marca principal</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.querySelectorAll("[data-editprov]").forEach(btn=>{
+    btn.addEventListener("click", (e)=>{ e.stopPropagation(); abrirModalProveedor(btn.dataset.editprov); });
+  });
+}
+function abrirModalProveedor(id){
+  const prov = id ? proveedorById(id) : null;
+  document.getElementById("proveedorModalTitle").textContent = prov ? "Editar proveedor" : "Nuevo proveedor";
+  document.getElementById("formProveedor").innerHTML = `
+    <div class="grid-2">
+      <div class="field"><label>Nombre comercial</label><input id="pf_nombre" value="${prov?prov.nombreComercial:""}"></div>
+      <div class="field"><label>Nombre del contacto</label><input id="pf_contacto" value="${prov?prov.contacto||"":""}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Teléfono</label><input id="pf_telefono" value="${prov?prov.telefono||"":""}"></div>
+      <div class="field"><label>Correo</label><input id="pf_correo" value="${prov?prov.correo||"":""}"></div>
+    </div>
+    <div class="field"><label>Dirección</label><input id="pf_direccion" value="${prov?prov.direccion||"":""}"></div>
+    <div class="field"><label>Marca principal que le compramos</label><input id="pf_marca" value="${prov?prov.marcaPrincipal||"":""}" placeholder="ej. Schneider Electric"></div>
+    <div class="field"><label>Productos que nos vende</label><textarea id="pf_productos" placeholder="Descripción general de lo que ofrece este proveedor">${prov?prov.productos||"":""}</textarea></div>
+    ${!prov?'<div class="note">El ID se genera solo: PR- + 3 letras del nombre comercial + consecutivo (ej. PR-SCH01).</div>':""}
+    <div class="flex-between" style="margin-top:10px;">
+      <button class="btn btn-outline" id="pf_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="pf_save">Guardar proveedor</button>
+    </div>
+  `;
+  document.getElementById("pf_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("pf_save").addEventListener("click", ()=>{
+    const nombreComercial = document.getElementById("pf_nombre").value.trim();
+    if(!nombreComercial){ showToast("Escribe el nombre comercial del proveedor", true); return; }
+    const data = {
+      id: prov ? prov.id : nextProveedorId(nombreComercial),
+      nombreComercial,
+      contacto: document.getElementById("pf_contacto").value.trim(),
+      telefono: document.getElementById("pf_telefono").value.trim(),
+      correo: document.getElementById("pf_correo").value.trim(),
+      direccion: document.getElementById("pf_direccion").value.trim(),
+      marcaPrincipal: document.getElementById("pf_marca").value.trim(),
+      productos: document.getElementById("pf_productos").value.trim()
+    };
+    if(prov){ Object.assign(prov, data); } else { state.proveedores.push(data); }
+    cerrarModales(); markDirty(); renderProveedores();
+    showToast("Proveedor guardado: "+data.id);
+  });
+  document.getElementById("modalProveedor").classList.add("active");
+}
+document.getElementById("btnNuevoProveedor").addEventListener("click", ()=>abrirModalProveedor(null));
+
+/* =========================================================================
    ACCIONES PENDIENTES
    ========================================================================= */
 function renderAcciones(){
@@ -1307,15 +1405,31 @@ function renderGastos(){
       <td class="right mono">${money(gastoSubtotal(g))}</td>
       <td class="right mono">${g.ivaAplica!==false?money(gastoIva(g)):"NA"}</td>
       <td class="right money">${money(g.costoTotal)}</td>
+      <td><select data-gastocr="${g.id}" style="width:auto; min-width:150px;">${opcionesCRGasto(g.crAsignada||"")}</select></td>
       <td class="right"><button class="btn btn-outline btn-sm" data-delgasto="${g.id}">Eliminar</button></td>
     </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th>CR asignada</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.querySelectorAll("[data-gastocr]").forEach(sel=>{
+    sel.addEventListener("change", ()=>{
+      const g = state.gastos.find(x=>x.id===sel.dataset.gastocr);
+      if(g){ g.crAsignada = sel.value; markDirty(); render(); }
+    });
+  });
   wrap.querySelectorAll("[data-delgasto]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       state.gastos = state.gastos.filter(g=>g.id!==btn.dataset.delgasto);
-      markDirty(); renderGastos();
+      markDirty(); render();
     });
   });
+}
+function opcionesCRGasto(seleccionado){
+  const folios = [...state.folios].sort((a,b)=>b.cr.localeCompare(a.cr));
+  const opts = folios.map(f=>{
+    const cli = clienteById(f.idCliente);
+    const label = f.cr+" · "+(cli?cli.empresa:"(sin cliente)");
+    return `<option value="${f.cr}" ${seleccionado===f.cr?"selected":""}>${label}</option>`;
+  }).join("");
+  return `<option value="">Ninguna (gasto general del negocio)</option>`+opts;
 }
 document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
   document.getElementById("formGasto").innerHTML = `
@@ -1330,6 +1444,9 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
       <label class="checkbox-row"><input type="checkbox" id="gf_ivaaplica" checked> Desglosar IVA (16%) automáticamente</label>
     </div>
     <div class="note" id="gf_preview">Subtotal: $0.00 &middot; IVA: $0.00</div>
+    <div class="field"><label>CR asignada <span class="hint">(opcional — si la eliges, este gasto resta directo de la utilidad de esa CR)</span></label>
+      <select id="gf_cr">${opcionesCRGasto("")}</select>
+    </div>
     <div class="flex-between">
       <button class="btn btn-outline" id="gf_cancel">Cancelar</button>
       <button class="btn btn-primary" id="gf_save">Guardar gasto</button>
@@ -1350,9 +1467,10 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
     state.gastos.push({
       id: uid("GA"), fecha: document.getElementById("gf_fecha").value || todayISO(),
       concepto, proveedor: document.getElementById("gf_prov").value.trim(),
-      costoTotal: N(total), ivaAplica: document.getElementById("gf_ivaaplica").checked
+      costoTotal: N(total), ivaAplica: document.getElementById("gf_ivaaplica").checked,
+      crAsignada: document.getElementById("gf_cr").value
     });
-    cerrarModales(); markDirty(); renderGastos();
+    cerrarModales(); markDirty(); render();
     showToast("Gasto agregado");
   });
   document.getElementById("modalGasto").classList.add("active");
@@ -1741,6 +1859,12 @@ function renderDetalle(){
       <div class="divider"></div>
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad total del folio</span><span class="v money" id="utilidadTotalFolioDisplay" style="color:var(--ok)">${money(utilidadTotal)}</span></div>
+      ${gastosDeCR(folio.cr).length ? `
+        <div class="small muted" style="margin-top:8px;">
+          Utilidad ya descuenta ${money(gastosAsignadosTotal(folio.cr))} en gastos asignados a esta CR:
+          ${gastosDeCR(folio.cr).map(g=>`${g.concepto} (${money(N(g.costoTotal))})`).join(", ")}.
+          <a href="#" data-goto="gastos">Ver en Gastos</a>
+        </div>` : ""}
     </div>
 
     <div class="card">
@@ -1840,6 +1964,9 @@ function renderDetalle(){
       const d = state.detalles.find(x=>x.cr===btn.dataset.cr && x.noRenglon==btn.dataset.rn);
       if(d) abrirModalEditarItem(d);
     });
+  });
+  cont.querySelectorAll("[data-goto]").forEach(a=>{
+    a.addEventListener("click", (e)=>{ e.preventDefault(); goto(a.dataset.goto); });
   });
 }
 
@@ -2124,6 +2251,7 @@ function render(){
   renderDashboard();
   renderSolicitudes();
   renderClientes();
+  renderProveedores();
   renderAcciones();
   renderGastos();
   renderConfig();
@@ -2181,7 +2309,7 @@ function excelSerialToISO(v){
 }
 
 function importarWorkbook(wb){
-  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[],
+  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[],
     config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:""}};
 
   if(wb.SheetNames.includes("Clientes")){
@@ -2267,7 +2395,19 @@ function importarWorkbook(wb){
         id:String(col(r,map,"ID")), fecha:excelSerialToISO(col(r,map,"Fecha")),
         concepto:col(r,map,"Concepto"), proveedor:col(r,map,"Proveedor"),
         costoTotal:N(col(r,map,"Costo Total")),
-        ivaAplica: !(ivaAplicaRaw===false||ivaAplicaRaw==="FALSE")
+        ivaAplica: !(ivaAplicaRaw===false||ivaAplicaRaw==="FALSE"),
+        crAsignada: col(r,map,"CR Asignada")
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Proveedores")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Proveedores"], "ID_Proveedor");
+    filas.forEach(r=>{
+      state.proveedores.push({
+        id:String(col(r,map,"ID_Proveedor")), nombreComercial:col(r,map,"Nombre Comercial"),
+        contacto:col(r,map,"Nombre del Contacto"), telefono:col(r,map,"Teléfono"),
+        correo:col(r,map,"Correo"), direccion:col(r,map,"Dirección"),
+        marcaPrincipal:col(r,map,"Marca Principal"), productos:col(r,map,"Productos que nos vende")
       });
     });
   }
@@ -2313,6 +2453,10 @@ function limpiarDatosResiduales(){
   const gastosVistos = new Map();
   state.gastos.forEach(g=>gastosVistos.set(g.id, g));
   state.gastos = [...gastosVistos.values()];
+
+  const proveedoresVistos = new Map();
+  state.proveedores.forEach(p=>proveedoresVistos.set(p.id, p));
+  state.proveedores = [...proveedoresVistos.values()];
 }
 
 /* =========================================================================
@@ -2371,10 +2515,16 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(accAoa), "Acciones_Pendientes");
 
   const gastosAoa = [
-    ["ID","Fecha","Concepto","Proveedor","Subtotal","IVA","Costo Total","IVA Aplica"],
-    ...state.gastos.map(g=>[g.id, g.fecha, g.concepto, g.proveedor, gastoSubtotal(g), gastoIva(g), N(g.costoTotal), g.ivaAplica!==false])
+    ["ID","Fecha","Concepto","Proveedor","Subtotal","IVA","Costo Total","IVA Aplica","CR Asignada"],
+    ...state.gastos.map(g=>[g.id, g.fecha, g.concepto, g.proveedor, gastoSubtotal(g), gastoIva(g), N(g.costoTotal), g.ivaAplica!==false, g.crAsignada||""])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(gastosAoa), "Gastos");
+
+  const provAoa = [
+    ["ID_Proveedor","Nombre Comercial","Nombre del Contacto","Teléfono","Correo","Dirección","Marca Principal","Productos que nos vende"],
+    ...state.proveedores.map(p=>[p.id, p.nombreComercial, p.contacto, p.telefono, p.correo, p.direccion, p.marcaPrincipal, p.productos])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(provAoa), "Proveedores");
 
   const cfgAoa = [
     ["Llave","Valor"],
