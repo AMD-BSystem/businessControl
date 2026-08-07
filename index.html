@@ -948,6 +948,11 @@ function proveedorById(id){ return state.proveedores.find(p=>p.id===id); }
 function clienteById(id){ return state.clientes.find(c=>c.id===id); }
 function detallesDe(cr){ return state.detalles.filter(d=>d.cr===cr); }
 function empresasUnicas(){ return [...new Set(state.clientes.map(c=>(c.empresa||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)); }
+function opcionesContactoPorEmpresa(empresa, idSeleccionado){
+  const matches = state.clientes.filter(c=>(c.empresa||"").trim()===empresa);
+  if(!empresa || matches.length===0) return `<option value="">Selecciona una empresa primero</option>`;
+  return `<option value="">Selecciona...</option>` + matches.map(c=>`<option value="${c.id}" ${c.id===idSeleccionado?"selected":""}>${c.contacto||c.id}</option>`).join("");
+}
 
 /* ---- costos: el costo de artículo se captura POR PIEZA; el resto de costos son por LOTE ---- */
 function costoArticuloTotal(d){ return N(d.costoArticulo) * N(d.cantidad||1); }
@@ -1815,10 +1820,20 @@ function renderDetalle(){
 
     <div class="card">
       <h3>Datos del contacto</h3>
-      <div class="grid-3">
-        <div class="kv"><span class="k">Contacto</span><span class="v">${folio.contacto||"-"}</span></div>
-        <div class="kv"><span class="k">Correo</span><span class="v">${folio.correoContacto||"-"}</span></div>
-        <div class="kv"><span class="k">Teléfono</span><span class="v">${folio.telContacto||"-"}</span></div>
+      <div class="grid-2">
+        <div class="field"><label>Empresa / Cliente</label>
+          <select id="dc_empresa">
+            <option value="">Selecciona...</option>
+            ${empresasUnicas().map(e=>`<option value="${e}" ${cli&&cli.empresa===e?"selected":""}>${e}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Contacto</label>
+          <select id="dc_contactoSel" ${cli?"":"disabled"}>${opcionesContactoPorEmpresa(cli?cli.empresa:"", folio.idCliente)}</select>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Correo</label><input id="dc_correo" value="${folio.correoContacto||""}"></div>
+        <div class="field"><label>Teléfono</label><input id="dc_telefono" value="${folio.telContacto||""}"></div>
       </div>
       <div class="kv"><span class="k">Entregar en</span><span class="v">${(cli&&cli.direccion)?cli.direccion:"<span class='muted'>Sin dirección en el cliente — agrégala en Clientes</span>"}</span></div>
     </div>
@@ -1941,6 +1956,30 @@ function renderDetalle(){
   cont.querySelectorAll("[data-goto]").forEach(a=>{
     a.addEventListener("click", (e)=>{ e.preventDefault(); goto(a.dataset.goto); });
   });
+  const dcEmpresa = document.getElementById("dc_empresa");
+  const dcContacto = document.getElementById("dc_contactoSel");
+  if(dcEmpresa){
+    dcEmpresa.addEventListener("change", ()=>{
+      dcContacto.disabled = !dcEmpresa.value;
+      dcContacto.innerHTML = opcionesContactoPorEmpresa(dcEmpresa.value, "");
+    });
+  }
+  if(dcContacto){
+    dcContacto.addEventListener("change", ()=>{
+      const nuevoCli = clienteById(dcContacto.value);
+      if(!nuevoCli) return;
+      folio.idCliente = nuevoCli.id;
+      folio.contacto = nuevoCli.contacto||"";
+      folio.correoContacto = nuevoCli.correo||"";
+      folio.telContacto = nuevoCli.telefono||"";
+      markDirty(); renderDetalle();
+      showToast("Cliente de la CR actualizado a: "+nuevoCli.empresa);
+    });
+  }
+  const dcCorreo = document.getElementById("dc_correo");
+  if(dcCorreo) dcCorreo.addEventListener("change", ()=>{ folio.correoContacto = dcCorreo.value.trim(); markDirty(); });
+  const dcTelefono = document.getElementById("dc_telefono");
+  if(dcTelefono) dcTelefono.addEventListener("change", ()=>{ folio.telContacto = dcTelefono.value.trim(); markDirty(); });
 }
 
 /* =========================================================================
