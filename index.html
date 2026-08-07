@@ -628,6 +628,7 @@ async function cerrarSesionMicrosoft(){
   document.getElementById("fileStatus").textContent = "Sin sesión de Microsoft";
   document.getElementById("fileStatus").classList.remove("connected");
   document.getElementById("btnSave").disabled = true;
+  document.getElementById("btnSave").textContent = "Guardar cambios";
   actualizarUILogin();
   try{ await msalListo; await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
 }
@@ -775,7 +776,8 @@ async function cargarExcelDesdeOneDrive(){
     loadedFileName = EXCEL_FILENAME;
     document.getElementById("fileStatus").textContent = "Conectado: "+cuentaActiva.username;
     document.getElementById("fileStatus").classList.add("connected");
-    document.getElementById("btnSave").disabled = false;
+    document.getElementById("btnSave").disabled = true;
+    document.getElementById("btnSave").textContent = "Guardado ✓";
     isDirty = false;
     currentCR = null;
     render();
@@ -786,21 +788,40 @@ async function cargarExcelDesdeOneDrive(){
     mostrarErrorPersistente("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
   }
 }
-async function guardarExcelEnOneDrive(){
-  if(!excelFileRef){ showToast("No hay un archivo de OneDrive conectado", true); return; }
+let guardadoEnCurso = false;
+async function guardarExcelEnOneDrive(esAuto){
+  if(!excelFileRef){ if(!esAuto) showToast("No hay un archivo de OneDrive conectado", true); return; }
+  if(guardadoEnCurso){
+    // ya hay un guardado en camino; cuando termine, markDirty ya reprogramó otro intento si hacía falta
+    return;
+  }
+  clearTimeout(autoSaveTimer);
+  guardadoEnCurso = true;
+  const btn = document.getElementById("btnSave");
   try{
-    const metaRes = await graphFetch(`/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}`);
-    const meta = await metaRes.json();
-    if(excelFileRef.lastModifiedDateTime && meta.lastModifiedDateTime !== excelFileRef.lastModifiedDateTime){
-      const continuar = confirm(
-        "El archivo Excel cambió en OneDrive desde que lo cargaste (probablemente se guardó desde el otro dispositivo).\n\n"+
-        "Si guardas ahora, tus cambios en pantalla sobrescribirán esa versión más reciente.\n\n"+
-        "¿Deseas continuar y sobrescribir de todas formas? Cancela para recargar primero."
-      );
-      if(!continuar) return;
-    }
-  }catch(err){ /* si no se puede verificar, seguimos con el guardado normal */ }
-  try{
+    try{
+      const metaRes = await graphFetch(`/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}`);
+      const meta = await metaRes.json();
+      if(excelFileRef.lastModifiedDateTime && meta.lastModifiedDateTime !== excelFileRef.lastModifiedDateTime){
+        if(esAuto){
+          mostrarErrorPersistente(
+            "Hay una versión más reciente del Excel en OneDrive (probablemente guardada desde el otro dispositivo).\n\n"+
+            "Tus cambios en pantalla NO se guardaron automáticamente, para no sobrescribir esa versión.\n\n"+
+            "Da clic en \"Buscar/recargar Excel\" para traer la versión más reciente (perderás tus cambios locales de esta pantalla), "+
+            "o en \"Guardar cambios\" si prefieres sobrescribirla con lo que tienes aquí."
+          );
+          btn.textContent = "Guardar cambios";
+          return;
+        }
+        const continuar = confirm(
+          "El archivo Excel cambió en OneDrive desde que lo cargaste (probablemente se guardó desde el otro dispositivo).\n\n"+
+          "Si guardas ahora, tus cambios en pantalla sobrescribirán esa versión más reciente.\n\n"+
+          "¿Deseas continuar y sobrescribir de todas formas? Cancela para recargar primero."
+        );
+        if(!continuar){ btn.textContent = "Guardar cambios"; return; }
+      }
+    }catch(err){ /* si no se puede verificar, seguimos con el guardado normal */ }
+
     const wb = exportarWorkbook();
     const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
     const blob = new Blob([wbout], {type:"application/octet-stream"});
@@ -813,11 +834,17 @@ async function guardarExcelEnOneDrive(){
     if(!res.ok) throw new Error("Graph PUT "+res.status);
     const updated = await res.json();
     excelFileRef.lastModifiedDateTime = updated.lastModifiedDateTime;
-    isDirty = false; document.getElementById("btnSave").disabled = true;
-    showToast("Guardado en OneDrive ("+cuentaActiva.username+")");
+    isDirty = false;
+    btn.disabled = true;
+    btn.textContent = "Guardado ✓";
+    showToast(esAuto ? "Guardado automáticamente en OneDrive" : "Guardado en OneDrive ("+cuentaActiva.username+")");
   }catch(err){
     console.error(err);
-    showToast("Ocurrió un error al guardar en OneDrive", true);
+    btn.textContent = "Guardar cambios";
+    if(!esAuto) showToast("Ocurrió un error al guardar en OneDrive", true);
+    else mostrarErrorPersistente("No se pudo guardar automáticamente en OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err)+"\n\nTus cambios siguen aquí en pantalla; da clic en \"Guardar cambios\" para reintentar.");
+  }finally{
+    guardadoEnCurso = false;
   }
 }
 async function iniciarMsal(){
@@ -2057,7 +2084,16 @@ function enviarWhatsapp(folio, cli){
    DIRTY / RENDER GENERAL
    ========================================================================= */
 let isDirty = false;
-function markDirty(){ isDirty = true; document.getElementById("btnSave").disabled = false; }
+const AUTO_SAVE_DELAY_MS = 2000;
+let autoSaveTimer = null;
+function markDirty(){
+  isDirty = true;
+  const btn = document.getElementById("btnSave");
+  btn.disabled = false;
+  btn.textContent = "Guardando...";
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(()=>{ guardarExcelEnOneDrive(true); }, AUTO_SAVE_DELAY_MS);
+}
 function render(){
   renderDashboard();
   renderSolicitudes();
@@ -2257,7 +2293,8 @@ function limpiarDatosResiduales(){
    EXCEL: GUARDAR
    ========================================================================= */
 document.getElementById("btnSave").addEventListener("click", async ()=>{
-  await guardarExcelEnOneDrive();
+  document.getElementById("btnSave").textContent = "Guardando...";
+  await guardarExcelEnOneDrive(false);
 });
 
 function exportarWorkbook(){
