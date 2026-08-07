@@ -1107,12 +1107,13 @@ function tablaFolios(list){
       <td>${cli ? cli.empresa : "<span class='muted'>(sin cliente)</span>"}</td>
       <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
       <td>${badgeHtml(f.status)}</td>
+      <td class="mono">${f.noOC || "<span class='muted'>-</span>"}</td>
       <td class="money right">${money(total)}</td>
       <td class="money right" style="color:var(--ok)">${money(utilidad)}</td>
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -1706,6 +1707,7 @@ function renderDetalle(){
   const fpp = fechaProbablePago(folio);
   const idx = STATUS_FLOW.findIndex(s=>s.key===folio.status);
   const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
+  const mostrarOCPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="PO Recibida") || (folio.status===CANCEL_KEY && folio.noOC);
 
   const renglonesHtml = dets.map(d=>{
     const auto = ivaEsAuto(d);
@@ -1801,6 +1803,7 @@ function renderDetalle(){
       <div>
         <h1 class="page-title mono">${folio.cr}</h1>
         <p class="page-sub">${cli?cli.empresa:"(sin cliente)"} &middot; Solicitado el ${fmtDate(folio.fechaSolicitud)}</p>
+        ${mostrarOCPersistente ? `<p class="small" style="margin:6px 0 0; display:flex; align-items:center; gap:6px;"><span class="muted">No. de OC del cliente:</span> <input id="inpOCPersistente" value="${folio.noOC||""}" style="width:auto; max-width:180px; padding:3px 8px; font-size:12.5px;"></p>` : ""}
       </div>
       <div>${badgeHtml(folio.status)}</div>
     </div>
@@ -1980,6 +1983,8 @@ function renderDetalle(){
   if(dcCorreo) dcCorreo.addEventListener("change", ()=>{ folio.correoContacto = dcCorreo.value.trim(); markDirty(); });
   const dcTelefono = document.getElementById("dc_telefono");
   if(dcTelefono) dcTelefono.addEventListener("change", ()=>{ folio.telContacto = dcTelefono.value.trim(); markDirty(); });
+  const inpOCPersistente = document.getElementById("inpOCPersistente");
+  if(inpOCPersistente) inpOCPersistente.addEventListener("change", ()=>{ folio.noOC = inpOCPersistente.value.trim(); markDirty(); });
 }
 
 /* =========================================================================
