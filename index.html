@@ -652,14 +652,28 @@ async function graphFetch(path, options){
 function nombreCoincide(nombre){
   return (nombre||"").toLowerCase()===EXCEL_FILENAME.toLowerCase();
 }
+async function listarHijosCompleto(path){
+  // Sigue @odata.nextLink para no perder archivos cuando una carpeta tiene
+  // más elementos de los que caben en una sola página de respuesta.
+  let items = [];
+  let url = "https://graph.microsoft.com/v1.0"+path+(path.includes("?")?"&":"?")+"$top=200";
+  while(url){
+    const token = await obtenerTokenGraph();
+    const res = await fetch(url, { headers: { "Authorization":"Bearer "+token } });
+    if(!res.ok){ const txt = await res.text().catch(()=>""); throw new Error("Graph "+res.status+": "+txt); }
+    const data = await res.json();
+    items = items.concat(data.value||[]);
+    url = data["@odata.nextLink"] || null;
+  }
+  return items;
+}
 async function buscarEnDriveRecursivo(driveId, itemIdOrRoot, profundidad){
-  if(profundidad>4) return null; // evita recursión infinita en carpetas muy anidadas
+  if(profundidad>6) return null; // evita recursión infinita en carpetas muy anidadas
   const base = itemIdOrRoot==="root" ? `/drives/${driveId}/root/children` : `/drives/${driveId}/items/${itemIdOrRoot}/children`;
-  const res = await graphFetch(base);
-  const data = await res.json();
-  const directo = (data.value||[]).find(c=>c.file && nombreCoincide(c.name));
+  const items = await listarHijosCompleto(base);
+  const directo = items.find(c=>c.file && nombreCoincide(c.name));
   if(directo) return { driveId, itemId: directo.id };
-  for(const child of (data.value||[])){
+  for(const child of items){
     if(child.folder){
       const found = await buscarEnDriveRecursivo(driveId, child.id, profundidad+1);
       if(found) return found;
