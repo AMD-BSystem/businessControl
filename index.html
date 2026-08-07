@@ -361,6 +361,13 @@
 
 <div class="toast" id="toast"></div>
 
+<div id="errorBanner" style="display:none; position:fixed; top:66px; left:50%; transform:translateX(-50%); max-width:600px; width:92vw; background:#b3432e; color:#fff; padding:16px 20px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:200; white-space:pre-wrap; font-size:13px; line-height:1.5;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+    <div id="errorBannerText" style="flex:1;"></div>
+    <button id="errorBannerClose" style="background:transparent; border:1px solid rgba(255,255,255,.5); color:#fff; border-radius:6px; padding:2px 9px; cursor:pointer; flex-shrink:0;">&times;</button>
+  </div>
+</div>
+
 <script>
 /* =========================================================================
    PLANTILLA DE PROPUESTA (HTML proporcionado por el usuario)
@@ -724,7 +731,7 @@ async function cargarExcelDesdeOneDrive(){
     showToast("Buscando "+EXCEL_FILENAME+" en OneDrive...");
     const { ref, errores } = await buscarArchivoExcel();
     if(!ref){
-      alert("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\n"+
+      mostrarErrorPersistente("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\n"+
         "Verifica: 1) que el archivo se llame exactamente así, 2) que esté compartido con esta cuenta ("+cuentaActiva.username+") con permiso de edición."+
         (errores&&errores.length ? "\n\nDetalle técnico:\n"+errores.join("\n") : ""));
       return;
@@ -748,7 +755,7 @@ async function cargarExcelDesdeOneDrive(){
     showToast("Excel cargado desde OneDrive: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
   }catch(err){
     console.error(err);
-    alert("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
+    mostrarErrorPersistente("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
   }
 }
 async function guardarExcelEnOneDrive(){
@@ -791,8 +798,8 @@ async function iniciarMsal(){
     const resp = await msalInstance.handleRedirectPromise();
     let account = (resp && resp.account) || msalInstance.getAllAccounts()[0] || null;
     if(account && !cuentaAutorizada(account.username)){
-      alert("Esta cuenta no está autorizada para usar esta app.\n\nCorreo detectado por Microsoft: "+account.username+"\n\nSi esperabas que esta cuenta funcionara, avisa este correo exacto para agregarlo a la lista de autorizados.");
-      try{ await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
+      mostrarErrorPersistente("Esta cuenta no está autorizada para usar esta app.\n\nCorreo detectado por Microsoft: "+account.username+"\n\nSi esperabas que esta cuenta funcionara, avisa este correo exacto para agregarlo a la lista de autorizados.\n\nPuedes cerrar este aviso e iniciar sesión con otra cuenta.");
+      actualizarUILogin(); // cuentaActiva sigue null: se muestra el botón normal de inicio de sesión
       return;
     }
     if(account){
@@ -933,6 +940,14 @@ function showToast(msg, isErr){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(()=>{ t.className="toast"; }, 3200);
 }
+function mostrarErrorPersistente(msg){
+  document.getElementById("errorBannerText").textContent = msg;
+  document.getElementById("errorBanner").style.display = "block";
+  console.error(msg);
+}
+document.getElementById("errorBannerClose").addEventListener("click", ()=>{
+  document.getElementById("errorBanner").style.display = "none";
+});
 
 /* =========================================================================
    NAVEGACIÓN
