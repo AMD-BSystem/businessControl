@@ -206,6 +206,7 @@
       </div>
       <div class="search-row">
         <input type="text" id="searchCR" placeholder="Buscar por folio, cliente, descripción o número de parte...">
+        <select id="filterCliente"><option value="">Todos los clientes</option></select>
         <select id="filterStatus"><option value="">Todos los status</option></select>
       </div>
       <div class="card" style="padding:0;">
@@ -277,15 +278,11 @@
         <p class="small muted" style="margin:0 0 10px;">La app se conecta a tu Excel guardado en OneDrive usando tu cuenta de Microsoft autorizada. La sesión se recuerda sola en este dispositivo/navegador — no hace falta iniciar sesión cada vez que abres la app.</p>
         <div class="kv"><span class="k">Cuenta conectada</span><span class="v mono" id="cfgMsAccountLabel">Ninguna</span></div>
         <div class="kv"><span class="k">Archivo conectado</span><span class="v mono" id="cfgMsFileLabel">Ninguno</span></div>
-        <div class="kv"><span class="k">Carpeta de PDFs recordada (local)</span><span class="v mono" id="cfgFolderRecordadoLabel">Ninguna</span></div>
+        <div class="kv"><span class="k">Carpeta de PDFs conectada</span><span class="v mono" id="cfgPdfFolderLabel">Ninguna</span></div>
       </div>
       <div class="card">
-        <h3>Carpeta donde guardar los PDF de propuestas</h3>
-        <p class="small muted" style="margin:0 0 10px;">Disponible en Chrome/Edge abriendo el archivo directo en el navegador (no dentro de la vista previa de Claude).</p>
-        <div class="flex-between">
-          <span class="mono small" id="pdfFolderLabel">Sin carpeta elegida (se descargará normal)</span>
-          <button class="btn btn-outline btn-sm" id="btnElegirCarpetaPdf">Elegir carpeta</button>
-        </div>
+        <h3>Carpeta donde se guardan los PDF de propuestas</h3>
+        <p class="small muted" style="margin:0;">Los PDF de propuestas se guardan automáticamente en la carpeta "2_Cotizaciones" de OneDrive, usando la misma sesión de Microsoft — no requiere elegir nada, ni volver a conectar cada vez que abres la app.</p>
       </div>
       <div class="card">
         <h3>Datos de contacto de tu empresa (van en el pie de la propuesta)</h3>
@@ -536,57 +533,6 @@ let state = {
 };
 let loadedFileName = null;
 let currentCR = null;
-let pdfDirHandle = null;
-
-/* =========================================================================
-   RECORDAR CARPETA DE PDFS (IndexedDB) — solo la carpeta local donde se
-   guardan los PDF de propuestas. La conexión al Excel ahora vive en la
-   sesión de Microsoft (ver bloque MSAL más abajo), que se recuerda sola.
-   ========================================================================= */
-const CONN_DB = "ccApp_conexion";
-const CONN_STORE = "handles";
-function conn_open(){
-  return new Promise((resolve,reject)=>{
-    const req = indexedDB.open(CONN_DB, 1);
-    req.onupgradeneeded = ()=>{ if(!req.result.objectStoreNames.contains(CONN_STORE)) req.result.createObjectStore(CONN_STORE); };
-    req.onsuccess = ()=>resolve(req.result);
-    req.onerror = ()=>reject(req.error);
-  });
-}
-async function conn_set(key, val){
-  try{
-    const db = await conn_open();
-    await new Promise((resolve,reject)=>{
-      const tx = db.transaction(CONN_STORE,"readwrite");
-      tx.objectStore(CONN_STORE).put(val, key);
-      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
-    });
-  }catch(err){ console.warn("No se pudo recordar la conexión", err); }
-}
-async function conn_get(key){
-  try{
-    const db = await conn_open();
-    return await new Promise((resolve,reject)=>{
-      const tx = db.transaction(CONN_STORE,"readonly");
-      const req = tx.objectStore(CONN_STORE).get(key);
-      req.onsuccess = ()=>resolve(req.result||null);
-      req.onerror = ()=>reject(req.error);
-    });
-  }catch(err){ return null; }
-}
-async function intentarReconectarAuto(){
-  if(!window.showDirectoryPicker) return; // API no soportada (ej. fuera de Chrome/Edge)
-  const savedDir = await conn_get("pdfDirHandle");
-  if(savedDir){
-    try{
-      const permGranted = (await savedDir.queryPermission({mode:"readwrite"}))==="granted";
-      if(permGranted){
-        pdfDirHandle = savedDir;
-        document.getElementById("pdfFolderLabel").textContent = "Carpeta: "+pdfDirHandle.name;
-      }
-    }catch(err){ console.warn("No se pudo reconectar la carpeta recordada", err); }
-  }
-}
 
 /* =========================================================================
    LOGIN CON MICROSOFT (MSAL) + EXCEL EN ONEDRIVE VÍA MICROSOFT GRAPH
@@ -832,6 +778,7 @@ async function cargarExcelDesdeOneDrive(){
     render();
     goto("dashboard");
     showToast("Excel cargado desde OneDrive: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
+    resolverCarpetaPdf().then(()=>renderConfig()); // se adelanta, sin bloquear la carga del Excel
   }catch(err){
     console.error(err);
     mostrarErrorPersistente("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
@@ -922,22 +869,46 @@ async function iniciarMsal(){
 document.getElementById("btnMsLogin").addEventListener("click", iniciarSesionMicrosoft);
 document.getElementById("btnMsLogout").addEventListener("click", cerrarSesionMicrosoft);
 
+const PDF_FOLDER_SHARE_URL = "https://1drv.ms/f/c/5d74b477fff6ebb3/IgB3bF79JCVmSL3FVQuO8oyMATi43grB816IhLg4XyvAN0k?e=PyfLR0";
+let pdfFolderRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
+async function resolverCarpetaPdf(){
+  if(pdfFolderRef) return pdfFolderRef;
+  if(!PDF_FOLDER_SHARE_URL) return null;
+  try{
+    const token = codificarShareToken(PDF_FOLDER_SHARE_URL);
+    const res = await graphFetch(`/shares/${token}/driveItem`);
+    const item = await res.json();
+    if(item && item.folder){
+      pdfFolderRef = { driveId: item.parentReference.driveId, itemId: item.id };
+      document.getElementById("cfgPdfFolderLabel").textContent = "2_Cotizaciones (OneDrive)";
+      return pdfFolderRef;
+    }
+  }catch(err){ console.warn("No se pudo resolver la carpeta de PDFs en OneDrive", err); }
+  return null;
+}
 async function guardarPdfBlob(blob, filename){
-  if(pdfDirHandle){
-    try{
-      const fh = await pdfDirHandle.getFileHandle(filename, {create:true});
-      const writable = await fh.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      showToast("PDF guardado en la carpeta elegida: "+filename);
-      return;
-    }catch(err){ console.error(err); /* si falla, caemos a la descarga normal */ }
-  }
+  try{
+    const ref = await resolverCarpetaPdf();
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("PDF guardado en OneDrive (2_Cotizaciones): "+filename);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  // Respaldo: si no hay sesión de Microsoft o algo falló, se descarga normal
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó el PDF normal.", true);
 }
 
 /* =========================================================================
@@ -1110,6 +1081,12 @@ function badgeHtml(status){
   const c = STATUS_COLORS[status] || {bg:"#eee", fg:"#333"};
   return `<span class="badge" style="background:${c.bg};color:${c.fg}">${status}</span>`;
 }
+function primeraDescripcionCR(cr){
+  const dets = detallesDe(cr);
+  if(!dets.length) return "";
+  const ordenado = [...dets].sort((a,b)=>a.noRenglon-b.noRenglon);
+  return ordenado[0].descripcion || "";
+}
 function tablaFolios(list){
   if(list.length===0){
     return `<div class="empty-state"><div class="ic">&#128193;</div><h3>Todavía no hay solicitudes</h3><p>Da clic en "Nueva solicitud" para registrar la primera, o carga tu Excel existente.</p></div>`;
@@ -1118,17 +1095,19 @@ function tablaFolios(list){
     const cli = clienteById(f.idCliente);
     const total = costoTotalFolio(f.cr);
     const utilidad = utilidadFolio(f.cr);
+    const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
       <td class="cr-code">${f.cr}</td>
       <td>${fmtDate(f.fechaSolicitud)}</td>
       <td>${cli ? cli.empresa : "<span class='muted'>(sin cliente)</span>"}</td>
+      <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
       <td>${badgeHtml(f.status)}</td>
       <td class="money right">${money(total)}</td>
       <td class="money right" style="color:var(--ok)">${money(utilidad)}</td>
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Status</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -1146,16 +1125,21 @@ function renderSolicitudes(){
       const o = document.createElement("option"); o.value=s.key; o.textContent=s.key; selStatus.appendChild(o);
     });
   }
+  const selCliente = document.getElementById("filterCliente");
+  const seleccionActual = selCliente.value;
+  selCliente.innerHTML = `<option value="">Todos los clientes</option>` +
+    empresasUnicas().map(e=>`<option value="${e}" ${e===seleccionActual?"selected":""}>${e}</option>`).join("");
   applySolicitudesFilter();
 }
 function applySolicitudesFilter(){
   const q = (document.getElementById("searchCR").value||"").toLowerCase();
   const st = document.getElementById("filterStatus").value;
+  const emp = document.getElementById("filterCliente").value;
   let list = state.folios.filter(f=>{
     const cli = clienteById(f.idCliente);
     const dets = detallesDe(f.cr);
     const haystack = [f.cr, cli?cli.empresa:"", f.contacto, ...dets.map(d=>d.descripcion), ...dets.map(d=>d.numeroParte)].join(" ").toLowerCase();
-    return (!q || haystack.includes(q)) && (!st || f.status===st);
+    return (!q || haystack.includes(q)) && (!st || f.status===st) && (!emp || (cli && cli.empresa===emp));
   });
   list.sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||""));
   document.getElementById("solicitudesTableWrap").innerHTML = tablaFolios(list);
@@ -1163,6 +1147,7 @@ function applySolicitudesFilter(){
 }
 document.getElementById("searchCR").addEventListener("input", applySolicitudesFilter);
 document.getElementById("filterStatus").addEventListener("change", applySolicitudesFilter);
+document.getElementById("filterCliente").addEventListener("change", applySolicitudesFilter);
 
 /* =========================================================================
    CLIENTES
@@ -1488,20 +1473,8 @@ function renderConfig(){
   document.getElementById("cfg_condcom").value = state.config.condicionesComerciales||"";
   document.getElementById("cfgMsAccountLabel").textContent = (typeof cuentaActiva!=="undefined" && cuentaActiva) ? cuentaActiva.username : "Ninguna";
   document.getElementById("cfgMsFileLabel").textContent = (typeof excelFileRef!=="undefined" && excelFileRef) ? EXCEL_FILENAME : "Ninguno";
-  document.getElementById("cfgFolderRecordadoLabel").textContent = pdfDirHandle ? pdfDirHandle.name : "Ninguna";
+  document.getElementById("cfgPdfFolderLabel").textContent = pdfFolderRef ? "2_Cotizaciones (OneDrive)" : "Ninguna";
 }
-document.getElementById("btnElegirCarpetaPdf").addEventListener("click", async ()=>{
-  if(!window.showDirectoryPicker){
-    showToast("Tu navegador no soporta elegir carpeta directo; se descargará normal.", true);
-    return;
-  }
-  try{
-    pdfDirHandle = await window.showDirectoryPicker();
-    conn_set("pdfDirHandle", pdfDirHandle);
-    document.getElementById("pdfFolderLabel").textContent = "Carpeta: "+pdfDirHandle.name;
-    showToast("Carpeta elegida para guardar PDFs");
-  }catch(err){ /* usuario canceló */ }
-});
 document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
   state.config.empresaCorreo = document.getElementById("cfg_correo").value.trim();
   state.config.empresaTelefono = document.getElementById("cfg_telefono").value.trim();
@@ -2105,6 +2078,9 @@ async function generarPropuestaPDF(folio, cli, dets){
   if(dets.some(d=>N(precioFinalRenglon(d))<=0)){
     showToast("Falta capturar costos/ganancia en algún renglón", true); return;
   }
+  if(dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
+    showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return;
+  }
   const qt = qtFolio(folio.cr);
   showToast("Generando PDF...");
   try{
@@ -2258,7 +2234,6 @@ function render(){
   if(currentCR) renderDetalle();
 }
 render();
-intentarReconectarAuto();
 iniciarMsal();
 
 /* =========================================================================
