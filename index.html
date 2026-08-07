@@ -577,6 +577,7 @@ const MSAL_AUTHORITY = "https://login.microsoftonline.com/consumers";
 const MSAL_SCOPES = ["User.Read", "Files.ReadWrite"];
 const CUENTAS_AUTORIZADAS = ["amd_laser_qro@outlook.com", "alex_juarezvega@outlook.com", "amd_servicio@outlook.com"];
 const EXCEL_FILENAME = "Control_Cotizaciones.xlsx";
+const EXCEL_SHARE_URL = "https://1drv.ms/x/c/5d74b477fff6ebb3/IQD-mBTZt7stTYA77TS6hPTeASS8i3sasTuRwP6k_hDz7xU?e=Bg5Th6";
 
 const msalInstance = new msal.PublicClientApplication({
   auth: {
@@ -707,8 +708,28 @@ async function buscarPorRutaDirecta(){
   }
   return null;
 }
+function codificarShareToken(url){
+  // https://learn.microsoft.com/graph/api/shares-get
+  const base64 = btoa(url).replace(/=/g,"").replace(/\//g,"_").replace(/\+/g,"-");
+  return "u!"+base64;
+}
+async function buscarPorLinkCompartido(){
+  if(!EXCEL_SHARE_URL) return null;
+  const token = codificarShareToken(EXCEL_SHARE_URL);
+  const res = await graphFetch(`/shares/${token}/driveItem`);
+  const item = await res.json();
+  if(item && item.file) return { driveId: item.parentReference.driveId, itemId: item.id };
+  return null;
+}
 async function buscarArchivoExcel(){
   const errores = [];
+
+  // 0) Link de compartición conocido — funciona igual para el dueño y para quien
+  //    tiene acceso compartido, sin depender del listado "compartido conmigo".
+  try{
+    const viaLink = await buscarPorLinkCompartido();
+    if(viaLink) return { ref: viaLink };
+  }catch(err){ errores.push("Link compartido: "+err.message); }
 
   // 1) Ruta directa conocida (una sola llamada, la más rápida — se intenta siempre primero)
   try{
