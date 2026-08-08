@@ -207,6 +207,7 @@
     <button class="nav-item" data-view="proveedores"><span class="ic">&#128230;</span> Proveedores</button>
     <button class="nav-item" data-view="acciones"><span class="ic">&#10003;</span> Acciones pendientes</button>
     <button class="nav-item" data-view="gastos"><span class="ic">&#128176;</span> Gastos</button>
+    <button class="nav-item" data-view="balance"><span class="ic">&#128200;</span> Balance</button>
     <button class="nav-item" data-view="config"><span class="ic">&#9881;</span> Configuración</button>
     <div class="nav-sep"></div>
     <button class="nav-item" id="btnNuevaSolicitudNav"><span class="ic">+</span> Nueva solicitud</button>
@@ -281,6 +282,7 @@
       </div>
       <div class="search-row">
         <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" id="chkMostrarCompletadas"> Mostrar completadas</label>
+        <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" id="chkMostrarEliminadas"> Mostrar eliminadas</label>
       </div>
       <div class="card" style="padding:0;">
         <div id="accionesTableWrap"></div>
@@ -298,6 +300,27 @@
       <div class="cards-row" id="gastosStatCards"></div>
       <div class="card" style="padding:0;">
         <div id="gastosTableWrap"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-balance">
+      <div class="flex-between">
+        <div>
+          <h1 class="page-title">Balance</h1>
+          <p class="page-sub">Ingresos (CRs pagadas), inyecciones de capital y gastos del negocio.</p>
+        </div>
+        <button class="btn btn-primary" id="btnNuevaInyeccion">+ Agregar inyección</button>
+      </div>
+      <div class="cards-row" id="balanceStatCards"></div>
+      <div class="card">
+        <h3>Balance por mes</h3>
+        <div id="balanceMesWrap"></div>
+      </div>
+      <div class="card" style="padding:0;">
+        <div class="flex-between" style="padding:20px 20px 0;">
+          <h3 style="margin:0;">Movimientos</h3>
+        </div>
+        <div id="balanceMovimientosWrap"></div>
       </div>
     </div>
 
@@ -406,6 +429,14 @@
     <h2>Nueva acción pendiente</h2>
     <p class="sub">La fecha se registra automáticamente con el día de hoy.</p>
     <div id="formAccion"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalInyeccion">
+  <div class="modal" style="width:460px;">
+    <h2>Nueva inyección de capital</h2>
+    <p class="sub">Dinero que entra al negocio y no viene de una CR pagada (ej. aportación de socio).</p>
+    <div id="formInyeccion"></div>
   </div>
 </div>
 
@@ -560,6 +591,8 @@ let state = {
   acciones: [],
   gastos: [],
   proveedores: [],
+  ingresos: [],
+  inyecciones: [],
   config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
 };
 let loadedFileName = null;
@@ -1292,9 +1325,10 @@ function renderProveedores(){
       <td>${p.telefono||"-"}</td>
       <td>${p.correo||"-"}</td>
       <td>${p.marcaPrincipal||"-"}</td>
+      <td style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${p.productos||""}">${p.productos||"<span class='muted'>-</span>"}</td>
       <td class="right"><button class="btn btn-outline btn-sm" data-editprov="${p.id}">Editar</button></td>
     </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Nombre comercial</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>Marca principal</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Nombre comercial</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>Marca principal</th><th>Productos</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   wrap.querySelectorAll("[data-editprov]").forEach(btn=>{
     btn.addEventListener("click", (e)=>{ e.stopPropagation(); abrirModalProveedor(btn.dataset.editprov); });
   });
@@ -1348,40 +1382,66 @@ document.getElementById("btnNuevoProveedor").addEventListener("click", ()=>abrir
 function renderAcciones(){
   const wrap = document.getElementById("accionesTableWrap");
   const mostrarCompletadas = document.getElementById("chkMostrarCompletadas").checked;
-  let lista = state.acciones.filter(a=>mostrarCompletadas || !a.completada);
+  const mostrarEliminadas = document.getElementById("chkMostrarEliminadas").checked;
+  let lista = state.acciones.filter(a=>{
+    if(a.eliminada) return mostrarEliminadas;
+    return mostrarCompletadas || !a.completada;
+  });
   const rank = {"Alta":0,"Media":1,"Deseable":2};
   lista = [...lista].sort((a,b)=> (rank[a.prioridad]-rank[b.prioridad]) || (a.fecha||"").localeCompare(b.fecha||""));
   if(lista.length===0){
     wrap.innerHTML = `<div class="empty-state"><div class="ic">&#10003;</div><h3>Sin acciones pendientes</h3><p>Agrega la primera acción del negocio.</p></div>`;
     return;
   }
-  const rows = lista.map(a=>`
-    <tr class="${a.completada?'done-row':''}">
+  const rows = lista.map(a=>{
+    const fechaCierre = a.eliminada ? ("Eliminada "+fmtDate(a.fechaEliminada)) : (a.completada ? ("Completada "+fmtDate(a.fechaCompletada)) : "-");
+    return `<tr class="${(a.completada||a.eliminada)?'done-row':''}">
       <td><span class="badge ${PRIORIDAD_CLASS[a.prioridad]}">${a.prioridad}</span></td>
       <td>${a.descripcion}</td>
       <td>${a.responsable||"-"}</td>
       <td class="mono">${fmtDate(a.fecha)}</td>
+      <td class="mono">${fechaCierre}</td>
       <td class="right">
-        <button class="btn btn-outline btn-sm" data-toggle="${a.id}">${a.completada?"Reabrir":"Completar"}</button>
-        <button class="btn btn-outline btn-sm" data-delacc="${a.id}">Eliminar</button>
+        ${a.eliminada
+          ? `<button class="btn btn-outline btn-sm" data-restaurar="${a.id}">Restaurar</button>
+             <button class="btn btn-danger btn-sm" data-delacc-def="${a.id}">Eliminar definitivamente</button>`
+          : `<button class="btn btn-outline btn-sm" data-toggle="${a.id}">${a.completada?"Reabrir":"Completar"}</button>
+             <button class="btn btn-outline btn-sm" data-delacc="${a.id}">Eliminar</button>`}
       </td>
-    </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Prioridad</th><th>Descripción</th><th>Responsable</th><th>Agregada</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Prioridad</th><th>Descripción</th><th>Responsable</th><th>Agregada</th><th>Cierre</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   wrap.querySelectorAll("[data-toggle]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const a = state.acciones.find(x=>x.id===btn.dataset.toggle);
       a.completada = !a.completada;
+      a.fechaCompletada = a.completada ? todayISO() : "";
       markDirty(); renderAcciones(); renderDashboard();
     });
   });
   wrap.querySelectorAll("[data-delacc]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      state.acciones = state.acciones.filter(x=>x.id!==btn.dataset.delacc);
+      const a = state.acciones.find(x=>x.id===btn.dataset.delacc);
+      a.eliminada = true; a.fechaEliminada = todayISO();
+      markDirty(); renderAcciones(); renderDashboard();
+    });
+  });
+  wrap.querySelectorAll("[data-restaurar]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const a = state.acciones.find(x=>x.id===btn.dataset.restaurar);
+      a.eliminada = false; a.fechaEliminada = "";
+      markDirty(); renderAcciones(); renderDashboard();
+    });
+  });
+  wrap.querySelectorAll("[data-delacc-def]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.acciones = state.acciones.filter(x=>x.id!==btn.dataset.delaccDef);
       markDirty(); renderAcciones(); renderDashboard();
     });
   });
 }
 document.getElementById("chkMostrarCompletadas").addEventListener("change", renderAcciones);
+document.getElementById("chkMostrarEliminadas").addEventListener("change", renderAcciones);
 document.getElementById("btnNuevaAccion").addEventListener("click", ()=>{
   document.getElementById("formAccion").innerHTML = `
     <div class="field"><label>Descripción de la acción</label><textarea id="af_desc"></textarea></div>
@@ -1405,7 +1465,7 @@ document.getElementById("btnNuevaAccion").addEventListener("click", ()=>{
       id: uid("AC"), descripcion:desc, fecha:todayISO(),
       responsable: document.getElementById("af_resp").value.trim(),
       prioridad: document.getElementById("af_prio").value,
-      completada:false
+      completada:false, fechaCompletada:"", eliminada:false, fechaEliminada:""
     });
     cerrarModales(); markDirty(); renderAcciones(); renderDashboard();
     showToast("Acción agregada");
@@ -1508,6 +1568,110 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
     showToast("Gasto agregado");
   });
   document.getElementById("modalGasto").classList.add("active");
+});
+
+/* =========================================================================
+   BALANCE DEL NEGOCIO
+   ========================================================================= */
+function mesDeFecha(fecha){ return (fecha||"").slice(0,7); } // "YYYY-MM"
+function nombreMes(yyyyMM){
+  if(!yyyyMM) return "Sin fecha";
+  const [y,m] = yyyyMM.split("-");
+  const nombres = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  return (nombres[N(m)-1]||"?")+" "+y;
+}
+function balancePorMes(){
+  const meses = {};
+  const asegurar = (m)=>{ if(!meses[m]) meses[m] = {mes:m, ingresos:0, inyecciones:0, gastos:0}; return meses[m]; };
+  state.ingresos.forEach(i=>{ asegurar(mesDeFecha(i.fecha)).ingresos += N(i.monto); });
+  state.inyecciones.forEach(i=>{ asegurar(mesDeFecha(i.fecha)).inyecciones += N(i.monto); });
+  state.gastos.forEach(g=>{ asegurar(mesDeFecha(g.fecha)).gastos += N(g.costoTotal); });
+  return Object.values(meses).sort((a,b)=>b.mes.localeCompare(a.mes));
+}
+function balanceGeneral(){
+  const totalIngresos = state.ingresos.reduce((s,i)=>s+N(i.monto),0);
+  const totalInyecciones = state.inyecciones.reduce((s,i)=>s+N(i.monto),0);
+  const totalGastos = state.gastos.reduce((s,g)=>s+N(g.costoTotal),0);
+  return { totalIngresos, totalInyecciones, totalGastos, balance: totalIngresos+totalInyecciones-totalGastos };
+}
+function renderBalance(){
+  const b = balanceGeneral();
+  document.getElementById("balanceStatCards").innerHTML = `
+    <div class="stat-card"><div class="label">Balance general</div><div class="value" style="color:${b.balance>=0?'var(--ok)':'var(--danger)'}">${money(b.balance)}</div></div>
+    <div class="stat-card"><div class="label">Ingresos (CRs pagadas)</div><div class="value blue">${money(b.totalIngresos)}</div></div>
+    <div class="stat-card"><div class="label">Inyecciones de capital</div><div class="value blue">${money(b.totalInyecciones)}</div></div>
+    <div class="stat-card"><div class="label">Gastos totales</div><div class="value" style="color:var(--danger)">${money(b.totalGastos)}</div></div>
+  `;
+  const meses = balancePorMes();
+  if(meses.length===0){
+    document.getElementById("balanceMesWrap").innerHTML = `<p class="small muted">Todavía no hay movimientos registrados.</p>`;
+  } else {
+    const filas = meses.map(m=>{
+      const balMes = m.ingresos + m.inyecciones - m.gastos;
+      return `<tr>
+        <td>${nombreMes(m.mes)}</td>
+        <td class="right mono">${money(m.ingresos)}</td>
+        <td class="right mono">${money(m.inyecciones)}</td>
+        <td class="right mono" style="color:var(--danger)">${money(m.gastos)}</td>
+        <td class="right money" style="color:${balMes>=0?'var(--ok)':'var(--danger)'}">${money(balMes)}</td>
+      </tr>`;
+    }).join("");
+    document.getElementById("balanceMesWrap").innerHTML = `<table class="tbl"><thead><tr><th>Mes</th><th class="right">Ingresos</th><th class="right">Inyecciones</th><th class="right">Gastos</th><th class="right">Balance</th></tr></thead><tbody>${filas}</tbody></table>`;
+  }
+
+  const movimientos = [
+    ...state.ingresos.map(i=>({tipo:"Ingreso", fecha:i.fecha, concepto:i.concepto||("Pago recibido - "+i.cr), monto:N(i.monto), id:i.id})),
+    ...state.inyecciones.map(i=>({tipo:"Inyección", fecha:i.fecha, concepto:"Inyección de "+i.nombre+(i.notas?(" — "+i.notas):""), monto:N(i.monto), id:i.id, borrable:true})),
+    ...state.gastos.map(g=>({tipo:"Gasto", fecha:g.fecha, concepto:g.concepto+(g.crAsignada?(" (asignado a "+g.crAsignada+")"):""), monto:-N(g.costoTotal)}))
+  ].sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+
+  if(movimientos.length===0){
+    document.getElementById("balanceMovimientosWrap").innerHTML = `<div class="empty-state"><div class="ic">&#128200;</div><h3>Sin movimientos</h3><p>Los ingresos aparecen solos cuando marcas una CR como pagada; agrega gastos o inyecciones para verlos aquí.</p></div>`;
+    return;
+  }
+  const filasMov = movimientos.map(m=>`
+    <tr>
+      <td class="mono">${fmtDate(m.fecha)}</td>
+      <td><span class="badge ${m.tipo==='Gasto'?'prio-alta':'prio-deseable'}">${m.tipo}</span></td>
+      <td>${m.concepto}</td>
+      <td class="right money" style="color:${m.monto>=0?'var(--ok)':'var(--danger)'}">${m.monto>=0?"+":""}${money(m.monto)}</td>
+      <td class="right">${m.borrable?`<button class="btn btn-outline btn-sm" data-delinyeccion="${m.id}">Eliminar</button>`:""}</td>
+    </tr>`).join("");
+  document.getElementById("balanceMovimientosWrap").innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="right">Monto</th><th></th></tr></thead><tbody>${filasMov}</tbody></table>`;
+  document.getElementById("balanceMovimientosWrap").querySelectorAll("[data-delinyeccion]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.inyecciones = state.inyecciones.filter(i=>i.id!==btn.dataset.delinyeccion);
+      markDirty(); renderBalance();
+    });
+  });
+}
+document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>{
+  document.getElementById("formInyeccion").innerHTML = `
+    <div class="field"><label>Nombre de quien hace la inyección</label><input id="iny_nombre"></div>
+    <div class="grid-2">
+      <div class="field"><label>Fecha</label><input type="date" id="iny_fecha" value="${todayISO()}"></div>
+      <div class="field"><label>Monto</label><input type="number" step="0.01" id="iny_monto" placeholder="0.00"></div>
+    </div>
+    <div class="field"><label>Notas <span class="hint">(opcional)</span></label><textarea id="iny_notas"></textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-outline" id="iny_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="iny_save">Guardar inyección</button>
+    </div>
+  `;
+  document.getElementById("iny_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("iny_save").addEventListener("click", ()=>{
+    const nombre = document.getElementById("iny_nombre").value.trim();
+    const monto = document.getElementById("iny_monto").value;
+    if(!nombre){ showToast("Escribe el nombre de quien hace la inyección", true); return; }
+    if(!monto || N(monto)<=0){ showToast("Captura el monto de la inyección", true); return; }
+    state.inyecciones.push({
+      id: uid("IY"), nombre, fecha: document.getElementById("iny_fecha").value || todayISO(),
+      monto: N(monto), notas: document.getElementById("iny_notas").value.trim()
+    });
+    cerrarModales(); markDirty(); renderBalance();
+    showToast("Inyección agregada");
+  });
+  document.getElementById("modalInyeccion").classList.add("active");
 });
 
 /* =========================================================================
@@ -1731,6 +1895,7 @@ function refrescarRenglon(d){
   const costoInput = document.getElementById("costoArticuloInput-"+sid);
   if(costoInput && d.costoArticuloUSD!==undefined && d.costoArticuloUSD!=="") costoInput.value = d.costoArticulo;
   setText("costoArtTotal-"+sid, money(costoArticuloTotal(d)));
+  setText("costoConIva-"+sid, money(costoConIva(d)/(N(d.cantidad)||1)));
   setText("cantLabel-"+sid, "(x"+d.cantidad+")");
   setText("costoTotalRenglon-"+sid, money(costoTotalRenglon(d)));
   setText("precioUnitFinal-"+sid, money(precioUnitarioFinal(d)));
@@ -1754,53 +1919,57 @@ function renderDetalle(){
   const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
   const mostrarOCPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="PO Recibida") || (folio.status===CANCEL_KEY && folio.noOC);
 
+  const costosBloqueados = !puedeAgregarItems;
   const renglonesHtml = dets.map(d=>{
     const auto = ivaEsAuto(d);
     const sid = safeId(d.cr, d.noRenglon);
+    const dis = costosBloqueados ? "disabled" : "";
     return `<div class="renglon-box">
-      <button class="btn btn-outline btn-sm rem" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>
+      ${!costosBloqueados ? `<button class="btn btn-outline btn-sm rem" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>` : ""}
       <div class="renglon-num">Renglón ${d.noRenglon} &middot; ${d.numeroParte||"s/n"}</div>
       <div class="grid-2">
         <div><strong>${d.descripcion}</strong><div class="small muted">Entrega: ${tiempoEntregaTexto(d)} ${d.link?('&middot; <a href="'+d.link+'" target="_blank">link</a>'):""}</div></div>
         <div class="right"><div class="money" id="precioFinalTop-${sid}">${money(precioFinalRenglon(d))}</div><div class="small muted" id="precioUnitTop-${sid}">${money(precioUnitarioFinal(d))} c/u</div></div>
       </div>
       <div class="small muted" style="margin:6px 0;">${d.notas?("Notas: "+d.notas):""}</div>
+      ${costosBloqueados ? `<div class="note" style="margin-bottom:10px;">Costos bloqueados: la OC ya fue recibida. Usa "Regresar" en el status si de verdad necesitas corregir algo.</div>` : ""}
       <div class="grid-4">
-        <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}"></div>
+        <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}" ${dis}></div>
         <div class="field">
           <label>Costo artículo (por pieza, sin IVA)</label>
           <div style="display:flex; gap:6px; align-items:center;">
-            <input id="costoArticuloInput-${sid}" data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="MXN">
+            <input id="costoArticuloInput-${sid}" data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="MXN" ${dis}>
             <span class="small muted">o</span>
-            <input data-costusd data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticuloUSD||""}" placeholder="USD">
+            <input data-costusd data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticuloUSD||""}" placeholder="USD" ${dis}>
           </div>
           <span class="hint">USD × tipo de cambio (${money(N(folio.tipoCambio)||18)}) = MXN, o captura MXN directo</span>
         </div>
         <div class="field">
           <label>IVA artículo ($, total lote)</label>
-          <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${auto?"disabled":""} placeholder="NA o monto">
-          <label class="checkbox-row"><input type="checkbox" data-ivaauto data-cr="${d.cr}" data-rn="${d.noRenglon}" ${auto?"checked":""}> Automático (16% x cant.)</label>
+          <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${(auto||costosBloqueados)?"disabled":""} placeholder="NA o monto">
+          <label class="checkbox-row"><input type="checkbox" data-ivaauto data-cr="${d.cr}" data-rn="${d.noRenglon}" ${auto?"checked":""} ${dis}> Automático (16% x cant.)</label>
         </div>
         <div class="kv" style="align-self:end;"><span class="k">Costo artículo total <span id="cantLabel-${sid}">(x${d.cantidad})</span></span><span class="v mono" id="costoArtTotal-${sid}">${money(costoArticuloTotal(d))}</span></div>
       </div>
+      <div class="kv"><span class="k">Costo artículo + IVA (por pieza)</span><span class="v mono" id="costoConIva-${sid}">${money(costoConIva(d)/(N(d.cantidad)||1))}</span></div>
       <div class="grid-4">
-        <div class="field"><label>Costo recolección <span class="hint">(lote)</span></label><input data-cost="recoleccion" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.recoleccion}" placeholder="NA o monto"></div>
-        <div class="field"><label>Costo entrega <span class="hint">(lote)</span></label><input data-cost="entrega" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.entrega}" placeholder="NA o monto"></div>
-        <div class="field"><label>Empaque <span class="hint">(lote)</span></label><input data-cost="empaque" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.empaque}" placeholder="NA o monto"></div>
-        <div class="field"><label>Mano de obra <span class="hint">(lote)</span></label><input data-cost="manoObra" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.manoObra}" placeholder="NA o monto"></div>
+        <div class="field"><label>Costo recolección <span class="hint">(lote)</span></label><input data-cost="recoleccion" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.recoleccion}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Costo entrega <span class="hint">(lote)</span></label><input data-cost="entrega" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.entrega}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Empaque <span class="hint">(lote)</span></label><input data-cost="empaque" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.empaque}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Mano de obra <span class="hint">(lote)</span></label><input data-cost="manoObra" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.manoObra}" placeholder="NA o monto" ${dis}></div>
       </div>
       <div class="otros-wrap">
         <label style="font-size:11.5px;font-weight:700;color:var(--text-600);text-transform:uppercase;">Otros costos extra (lote)</label>
         ${(d.otros||[]).map(o=>`
           <div class="otro-row">
-            <input data-otrodesc data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.desc}" placeholder="Descripción">
-            <input data-otromonto data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.monto}" placeholder="Monto" style="max-width:120px;">
-            <button class="btn btn-outline btn-sm" data-otrorem data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}">&times;</button>
+            <input data-otrodesc data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.desc}" placeholder="Descripción" ${dis}>
+            <input data-otromonto data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.monto}" placeholder="Monto" style="max-width:120px;" ${dis}>
+            ${!costosBloqueados ? `<button class="btn btn-outline btn-sm" data-otrorem data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}">&times;</button>` : ""}
           </div>`).join("")}
-        <button class="btn btn-outline btn-sm" data-otroadd data-cr="${d.cr}" data-rn="${d.noRenglon}">+ Agregar costo extra</button>
+        ${!costosBloqueados ? `<button class="btn btn-outline btn-sm" data-otroadd data-cr="${d.cr}" data-rn="${d.noRenglon}">+ Agregar costo extra</button>` : ""}
       </div>
       <div class="grid-3" style="margin-top:10px;">
-        <div class="field"><label>% de ganancia</label><input data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25"></div>
+        <div class="field"><label>% de ganancia</label><input data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25" ${dis}></div>
         <div class="kv" style="align-self:end;"><span class="k">Precio final por pieza</span><span class="v money" id="precioUnitFinal-${sid}">${money(precioUnitarioFinal(d))}</span></div>
         <div class="kv" style="align-self:end;"><span class="k">Utilidad del renglón</span><span class="v money" id="utilidadRenglon-${sid}" style="color:var(--ok)">${money(utilidadRenglon(d))}</span></div>
       </div>
@@ -1900,7 +2069,7 @@ function renderDetalle(){
         <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
           <div style="display:flex; align-items:center; gap:8px;">
             <label class="small muted" style="text-transform:none; font-weight:600; white-space:nowrap;">Tipo de cambio USD&rarr;MXN</label>
-            <input id="inpTipoCambio" type="number" step="0.01" min="0" value="${folio.tipoCambio!==undefined&&folio.tipoCambio!==""?folio.tipoCambio:18}" style="width:90px;">
+            <input id="inpTipoCambio" type="number" step="0.01" min="0" value="${folio.tipoCambio!==undefined&&folio.tipoCambio!==""?folio.tipoCambio:18}" style="width:90px;" ${costosBloqueados?"disabled":""}>
           </div>
           ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
         </div>
@@ -1997,8 +2166,11 @@ function renderDetalle(){
     btnRegresarStatus.addEventListener("click", ()=>{
       const idxAhora = STATUS_FLOW.findIndex(s=>s.key===folio.status);
       if(idxAhora>0){
+        if(folio.status==="Pago Recibido"){
+          state.ingresos = state.ingresos.filter(i=>i.cr!==folio.cr); // se deshace el ingreso automático de esta CR
+        }
         folio.status = STATUS_FLOW[idxAhora-1].key;
-        markDirty(); renderDetalle();
+        markDirty(); renderDetalle(); renderBalance();
         showToast("Status regresado a: "+folio.status);
       }
     });
@@ -2016,7 +2188,13 @@ function renderDetalle(){
       if(flowNow && flowNow.next){
         folio.status = flowNow.next;
         if(!folio.fechas[folio.status]) folio.fechas[folio.status] = todayISO();
-        markDirty(); renderDetalle();
+        if(folio.status==="Pago Recibido" && !state.ingresos.some(i=>i.cr===folio.cr)){
+          state.ingresos.push({
+            id: uid("IN"), cr: folio.cr, fecha: folio.fechas[folio.status],
+            concepto: "Pago recibido - "+folio.cr, monto: costoTotalFolio(folio.cr)
+          });
+        }
+        markDirty(); renderDetalle(); renderBalance();
         showToast("Status actualizado a: "+folio.status);
       }
     });
@@ -2353,6 +2531,7 @@ function render(){
   renderProveedores();
   renderAcciones();
   renderGastos();
+  renderBalance();
   renderConfig();
   if(currentCR) renderDetalle();
 }
@@ -2407,7 +2586,7 @@ function excelSerialToISO(v){
 }
 
 function importarWorkbook(wb){
-  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[],
+  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[],
     config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:""}};
 
   if(wb.SheetNames.includes("Clientes")){
@@ -2482,7 +2661,10 @@ function importarWorkbook(wb){
         id:String(col(r,map,"ID")), descripcion:col(r,map,"Descripción"),
         fecha:excelSerialToISO(col(r,map,"Fecha")), responsable:col(r,map,"Responsable"),
         prioridad:col(r,map,"Prioridad")||"Media",
-        completada:(col(r,map,"Completada")===true||col(r,map,"Completada")==="TRUE")
+        completada:(col(r,map,"Completada")===true||col(r,map,"Completada")==="TRUE"),
+        fechaCompletada:excelSerialToISO(col(r,map,"Fecha Completada")),
+        eliminada:(col(r,map,"Eliminada")===true||col(r,map,"Eliminada")==="TRUE"),
+        fechaEliminada:excelSerialToISO(col(r,map,"Fecha Eliminada"))
       });
     });
   }
@@ -2507,6 +2689,24 @@ function importarWorkbook(wb){
         contacto:col(r,map,"Nombre del Contacto"), telefono:col(r,map,"Teléfono"),
         correo:col(r,map,"Correo"), direccion:col(r,map,"Dirección"),
         marcaPrincipal:col(r,map,"Marca Principal"), productos:col(r,map,"Productos que nos vende")
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Ingresos")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Ingresos"], "ID");
+    filas.forEach(r=>{
+      state.ingresos.push({
+        id:String(col(r,map,"ID")), cr:col(r,map,"CR"), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        concepto:col(r,map,"Concepto"), monto:N(col(r,map,"Monto"))
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Inyecciones")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Inyecciones"], "ID");
+    filas.forEach(r=>{
+      state.inyecciones.push({
+        id:String(col(r,map,"ID")), nombre:col(r,map,"Nombre"), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        monto:N(col(r,map,"Monto")), notas:col(r,map,"Notas")
       });
     });
   }
@@ -2556,6 +2756,14 @@ function limpiarDatosResiduales(){
   const proveedoresVistos = new Map();
   state.proveedores.forEach(p=>proveedoresVistos.set(p.id, p));
   state.proveedores = [...proveedoresVistos.values()];
+
+  const ingresosVistos = new Map();
+  state.ingresos.forEach(i=>ingresosVistos.set(i.id, i));
+  state.ingresos = [...ingresosVistos.values()];
+
+  const inyeccionesVistas = new Map();
+  state.inyecciones.forEach(i=>inyeccionesVistas.set(i.id, i));
+  state.inyecciones = [...inyeccionesVistas.values()];
 }
 
 /* =========================================================================
@@ -2608,8 +2816,8 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detAoa), "CR_Detalle");
 
   const accAoa = [
-    ["ID","Descripción","Fecha","Responsable","Prioridad","Completada"],
-    ...state.acciones.map(a=>[a.id, a.descripcion, a.fecha, a.responsable, a.prioridad, a.completada])
+    ["ID","Descripción","Fecha","Responsable","Prioridad","Completada","Fecha Completada","Eliminada","Fecha Eliminada"],
+    ...state.acciones.map(a=>[a.id, a.descripcion, a.fecha, a.responsable, a.prioridad, a.completada, a.fechaCompletada||"", !!a.eliminada, a.fechaEliminada||""])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(accAoa), "Acciones_Pendientes");
 
@@ -2624,6 +2832,18 @@ function exportarWorkbook(){
     ...state.proveedores.map(p=>[p.id, p.nombreComercial, p.contacto, p.telefono, p.correo, p.direccion, p.marcaPrincipal, p.productos])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(provAoa), "Proveedores");
+
+  const ingAoa = [
+    ["ID","CR","Fecha","Concepto","Monto"],
+    ...state.ingresos.map(i=>[i.id, i.cr, i.fecha, i.concepto, N(i.monto)])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ingAoa), "Ingresos");
+
+  const inyAoa = [
+    ["ID","Nombre","Fecha","Monto","Notas"],
+    ...state.inyecciones.map(i=>[i.id, i.nombre, i.fecha, N(i.monto), i.notas])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inyAoa), "Inyecciones");
 
   const cfgAoa = [
     ["Llave","Valor"],
