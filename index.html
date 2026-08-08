@@ -27,13 +27,18 @@
   ::selection{background:var(--blue-100);}
 
   #shell{display:grid; grid-template-columns:230px 1fr; grid-template-rows:56px 1fr; height:100vh; min-height:600px;}
+  #shell.sidebar-collapsed{grid-template-columns:0px 1fr;}
+  #shell.sidebar-collapsed #sidebar{display:none;}
 
-  #topbar{grid-column:1/3; grid-row:1; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#041629 0%,#0b2545 55%,#145da0 100%); color:var(--white); padding:0 20px; border-bottom:1px solid var(--navy-700);}
-  #topbar .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px;}
+  #topbar{grid-column:1/3; grid-row:1; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#041629 0%,#0b2545 55%,#145da0 100%); color:var(--white); padding:0 20px; border-bottom:1px solid var(--navy-700); gap:10px; min-width:0;}
+  #topbar .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px; flex-shrink:0;}
   #topbar .brand .dot{width:9px; height:9px; border-radius:50%; background:var(--blue-400);}
-  #topbar .file-status{font-size:12px; color:var(--gray-400); display:flex; align-items:center; gap:8px; font-family:var(--mono);}
+  #topbar .hamburger{background:transparent; border:1px solid rgba(255,255,255,.25); color:#fff; font-size:15px; line-height:1; padding:8px 11px; border-radius:7px; flex-shrink:0;}
+  #topbar .hamburger:hover{background:rgba(255,255,255,.08);}
+  #topbar .file-status{font-size:12px; color:var(--gray-400); display:flex; align-items:center; gap:8px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   #topbar .file-status.connected{color:#8fd6b0;}
-  #topbar .actions{display:flex; gap:8px; align-items:center;}
+  #topbar .actions{display:flex; gap:8px; align-items:center; flex-shrink:0; overflow-x:auto;}
+  #sidebarBackdrop{display:none; position:fixed; inset:0; background:rgba(4,22,41,.55); z-index:39;}
 
   #sidebar{grid-column:1; grid-row:2; background:var(--navy-900); color:var(--gray-400); padding:18px 12px; display:flex; flex-direction:column; gap:2px; overflow-y:auto;}
   .nav-item{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; color:var(--gray-400); font-size:13.5px; font-weight:500; text-decoration:none; border:none; background:none; text-align:left; width:100%;}
@@ -151,13 +156,39 @@
   .prio-media{background:#fff2cc; color:#7a5b00;}
   .prio-deseable{background:#e3e6eb; color:#4c5566;}
   .done-row{opacity:.5; text-decoration:line-through;}
+
+  [id$="TableWrap"]{overflow-x:auto;}
+
+  /* ===== Responsivo ===== */
+  @media (max-width: 860px){
+    #topbar .file-status{display:none;}
+    #shell{grid-template-columns:1fr;}
+    #shell.sidebar-collapsed{grid-template-columns:1fr;}
+    #sidebar{position:fixed; top:56px; left:0; bottom:0; width:230px; z-index:40; display:none; box-shadow:4px 0 24px rgba(0,0,0,.35);}
+    #shell:not(.sidebar-collapsed) #sidebar{display:flex;}
+    #shell:not(.sidebar-collapsed) #sidebarBackdrop{display:block;}
+    #main{padding:18px 14px;}
+  }
+  @media (max-width: 720px){
+    .grid-2,.grid-3,.grid-4{grid-template-columns:1fr;}
+    .modal{padding:18px; width:94vw;}
+    .cards-row{grid-template-columns:1fr 1fr;}
+    #topbar{padding:0 12px;}
+    #topbar .brand span:not(.dot){font-size:13px;}
+    h1.page-title{font-size:17px;}
+  }
+  @media (max-width: 480px){
+    .cards-row{grid-template-columns:1fr;}
+  }
 </style>
 </head>
 <body>
 
 <div id="shell">
+  <div id="sidebarBackdrop"></div>
   <div id="topbar">
-    <div class="brand"><span class="dot"></span> Control de Cotizaciones</div>
+    <button class="hamburger" id="btnToggleSidebar" title="Mostrar/ocultar menú">&#9776;</button>
+    <div class="brand"><span class="dot"></span> <span>Control de Cotizaciones</span></div>
     <div class="file-status" id="fileStatus">Sin sesión de Microsoft</div>
     <div class="actions">
       <span class="mono small" id="msAccountChip" style="display:none; color:#8fd6b0;"></span>
@@ -1045,9 +1076,21 @@ function goto(view){
   document.getElementById("view-"+view).classList.add("active");
   document.querySelectorAll(".nav-item[data-view]").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
   render();
+  if(window.innerWidth<=860) document.getElementById("shell").classList.add("sidebar-collapsed"); // cierra el menú al navegar en celular
 }
 document.querySelectorAll(".nav-item[data-view]").forEach(b=>b.addEventListener("click", ()=>goto(b.dataset.view)));
 document.querySelectorAll("[data-goto]").forEach(b=>b.addEventListener("click", ()=>goto(b.dataset.goto)));
+
+/* =========================================================================
+   MENÚ LATERAL COLAPSABLE (y responsivo en celular)
+   ========================================================================= */
+if(window.innerWidth<=860) document.getElementById("shell").classList.add("sidebar-collapsed"); // cerrado por default en celular
+document.getElementById("btnToggleSidebar").addEventListener("click", ()=>{
+  document.getElementById("shell").classList.toggle("sidebar-collapsed");
+});
+document.getElementById("sidebarBackdrop").addEventListener("click", ()=>{
+  document.getElementById("shell").classList.add("sidebar-collapsed");
+});
 
 /* =========================================================================
    DASHBOARD
@@ -1614,7 +1657,7 @@ function guardarNuevaSolicitud(){
     correoContacto: document.getElementById("sf_correo").value.trim(),
     telContacto: document.getElementById("sf_telefono").value.trim(),
     status: "Pendiente",
-    fechas: {}, noOC:"", notasGenerales:"",
+    fechas: {}, noOC:"", notasGenerales:"", tipoCambio:18,
     cancelada:false, motivoCancelacion:"", fechaCancelacion:""
   };
   ensureFechas(folio);
@@ -1625,7 +1668,7 @@ function guardarNuevaSolicitud(){
       cr, noRenglon:i+1, descripcion:r.descripcion.trim(), cantidad:N(r.cantidad)||1,
       numeroParte:r.numeroParte.trim(), tiempoEntregaValor:r.tiempoEntregaValor, tiempoEntregaUnidad:r.tiempoEntregaUnidad||"días",
       link:r.link.trim(), notas:r.notas.trim(),
-      costoArticulo:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"",
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"",
       otros:[], pctGanancia:""
     });
   });
@@ -1685,6 +1728,8 @@ function refrescarRenglon(d){
   const sid = safeId(d.cr, d.noRenglon);
   const ivaInput = document.getElementById("ivaInput-"+sid);
   if(ivaInput && ivaEsAuto(d)) ivaInput.value = ivaValue(d).toFixed(2);
+  const costoInput = document.getElementById("costoArticuloInput-"+sid);
+  if(costoInput && d.costoArticuloUSD!==undefined && d.costoArticuloUSD!=="") costoInput.value = d.costoArticulo;
   setText("costoArtTotal-"+sid, money(costoArticuloTotal(d)));
   setText("cantLabel-"+sid, "(x"+d.cantidad+")");
   setText("costoTotalRenglon-"+sid, money(costoTotalRenglon(d)));
@@ -1722,7 +1767,15 @@ function renderDetalle(){
       <div class="small muted" style="margin:6px 0;">${d.notas?("Notas: "+d.notas):""}</div>
       <div class="grid-4">
         <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}"></div>
-        <div class="field"><label>Costo artículo (por pieza, sin IVA)</label><input data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="NA o monto/pza"></div>
+        <div class="field">
+          <label>Costo artículo (por pieza, sin IVA)</label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input id="costoArticuloInput-${sid}" data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="MXN">
+            <span class="small muted">o</span>
+            <input data-costusd data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticuloUSD||""}" placeholder="USD">
+          </div>
+          <span class="hint">USD × tipo de cambio (${money(N(folio.tipoCambio)||18)}) = MXN, o captura MXN directo</span>
+        </div>
         <div class="field">
           <label>IVA artículo ($, total lote)</label>
           <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${auto?"disabled":""} placeholder="NA o monto">
@@ -1844,7 +1897,13 @@ function renderDetalle(){
     <div class="card">
       <div class="flex-between">
         <h3>Renglones cotizados</h3>
-        ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label class="small muted" style="text-transform:none; font-weight:600; white-space:nowrap;">Tipo de cambio USD&rarr;MXN</label>
+            <input id="inpTipoCambio" type="number" step="0.01" min="0" value="${folio.tipoCambio!==undefined&&folio.tipoCambio!==""?folio.tipoCambio:18}" style="width:90px;">
+          </div>
+          ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
+        </div>
       </div>
       ${renglonesHtml}
       <div class="divider"></div>
@@ -1872,6 +1931,26 @@ function renderDetalle(){
       markDirty(); refrescarRenglon(d);
     });
   });
+  cont.querySelectorAll("[data-costusd]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const d = state.detalles.find(x=>x.cr===inp.dataset.cr && x.noRenglon==inp.dataset.rn);
+      d.costoArticuloUSD = inp.value;
+      d.costoArticulo = inp.value==="" ? d.costoArticulo : (N(inp.value) * (N(folio.tipoCambio)||18)).toFixed(2);
+      markDirty(); refrescarRenglon(d);
+    });
+  });
+  const inpTipoCambio = document.getElementById("inpTipoCambio");
+  if(inpTipoCambio){
+    inpTipoCambio.addEventListener("input", ()=>{
+      folio.tipoCambio = inpTipoCambio.value;
+      dets.forEach(d=>{
+        if(d.costoArticuloUSD!==undefined && d.costoArticuloUSD!==""){
+          d.costoArticulo = (N(d.costoArticuloUSD) * (N(folio.tipoCambio)||18)).toFixed(2);
+        }
+      });
+      markDirty(); renderDetalle();
+    });
+  }
   cont.querySelectorAll("[data-ivaauto]").forEach(chk=>{
     chk.addEventListener("change", ()=>{
       const d = state.detalles.find(x=>x.cr===chk.dataset.cr && x.noRenglon==chk.dataset.rn);
@@ -2021,7 +2100,7 @@ function abrirModalAgregarItem(folio){
       numeroParte: document.getElementById("ai_parte").value.trim(),
       tiempoEntregaValor: document.getElementById("ai_tiempoVal").value, tiempoEntregaUnidad: document.getElementById("ai_tiempoUnidad").value,
       link: document.getElementById("ai_link").value.trim(), notas: document.getElementById("ai_notas").value.trim(),
-      costoArticulo:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"", otros:[], pctGanancia:""
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"", otros:[], pctGanancia:""
     });
     cerrarModales(); markDirty(); renderDetalle();
     showToast("Item agregado al folio "+folio.cr);
@@ -2354,6 +2433,7 @@ function importarWorkbook(wb){
         status, noOC:col(r,map,"No. OC Cliente"), notasGenerales:col(r,map,"Notas Generales"),
         cancelada:(status===CANCEL_KEY),
         motivoCancelacion:col(r,map,"Motivo Cancelación"), fechaCancelacion:excelSerialToISO(col(r,map,"Fecha Cancelación")),
+        tipoCambio: (col(r,map,"Tipo de Cambio USD")!=="") ? N(col(r,map,"Tipo de Cambio USD")) : 18,
         fechas:{}
       };
       ensureFechas(folio);
@@ -2387,7 +2467,7 @@ function importarWorkbook(wb){
         tiempoEntregaUnidad: tieneEntregaCol ? (col(r,map,"Tiempo de Entrega (unidad)")||"días") : "días",
         link:col(r,map,"Link"),
         notas: tieneEntregaCol ? col(r,map,"Notas") : [col(r,map,"Notas"), col(r,map,"Proveedor")?("(Proveedor previo: "+col(r,map,"Proveedor")+")"):""].filter(Boolean).join(" "),
-        costoArticulo:col(r,map,"Costo Artículo sin IVA"),
+        costoArticulo:col(r,map,"Costo Artículo sin IVA"), costoArticuloUSD:col(r,map,"Costo Artículo USD"),
         ivaAuto:(ivaAutoRaw===true||ivaAutoRaw==="TRUE"), iva:col(r,map,"IVA Artículo ($)"),
         recoleccion:col(r,map,"Costo Recolección"), entrega:col(r,map,"Costo Entrega"),
         empaque:col(r,map,"Empaque"), manoObra:col(r,map,"Mano de Obra"),
@@ -2499,7 +2579,7 @@ function exportarWorkbook(){
     "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Total","QT (folio propuesta)",
     "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
     "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
-    "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación"];
+    "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
   const encAoa = [encHeaders, ...state.folios.map(f=>{
     ensureFechas(f);
     const cli = clienteById(f.idCliente);
@@ -2509,19 +2589,19 @@ function exportarWorkbook(){
       f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
       f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
       f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
-      f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||""];
+      f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
   })];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(encAoa), "CR_Encabezado");
 
   const detHeaders = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
     "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
-    "Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
+    "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
     "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
     "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
   const detAoa = [detHeaders, ...state.detalles.map(d=>[
     d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
     d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
-    d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
+    d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
     (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
     costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)
   ])];
