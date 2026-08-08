@@ -1019,21 +1019,28 @@ function opcionesContactoPorEmpresa(empresa, idSeleccionado){
 }
 
 /* ---- costos: el costo de artículo se captura POR PIEZA; el resto de costos son por LOTE ---- */
-function costoArticuloTotal(d){ return N(d.costoArticulo) * N(d.cantidad||1); }
+function round2(v){ return Math.round((N(v) + Number.EPSILON) * 100) / 100; }
+function costoArticuloTotal(d){ return round2(N(d.costoArticulo) * N(d.cantidad||1)); }
 function ivaEsAuto(d){ return d.ivaAuto !== false; }
-function ivaValue(d){ return ivaEsAuto(d) ? costoArticuloTotal(d)*0.16 : N(d.iva); }
-function costoConIva(d){ return costoArticuloTotal(d) + ivaValue(d); }
-function otrosTotal(d){ return (d.otros||[]).reduce((s,o)=>s+N(o.monto),0); }
-function costoTotalRenglon(d){ return costoConIva(d) + N(d.recoleccion) + N(d.entrega) + N(d.empaque) + N(d.manoObra) + otrosTotal(d); }
-function precioFinalRenglon(d){ return costoTotalRenglon(d) * (1 + N(d.pctGanancia)/100); }
-function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return precioFinalRenglon(d)/cant; }
-function utilidadRenglon(d){ return precioFinalRenglon(d) - costoTotalRenglon(d); }
-function costoTotalFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0); }
+function ivaValue(d){ return round2(ivaEsAuto(d) ? costoArticuloTotal(d)*0.16 : N(d.iva)); }
+function costoConIva(d){ return round2(costoArticuloTotal(d) + ivaValue(d)); }
+function otrosTotal(d){ return round2((d.otros||[]).reduce((s,o)=>s+N(o.monto),0)); }
+function costoTotalRenglon(d){ return round2(costoConIva(d) + N(d.recoleccion) + N(d.entrega) + N(d.empaque) + N(d.manoObra) + otrosTotal(d)); }
+// El precio por pieza se redondea PRIMERO (a 2 decimales, como llega una OC real),
+// y el total del renglón sale de multiplicar ese precio ya redondeado por la cantidad.
+function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return round2((costoTotalRenglon(d) * (1 + N(d.pctGanancia)/100)) / cant); }
+function precioFinalRenglon(d){ const cant = N(d.cantidad)||1; return round2(precioUnitarioFinal(d) * cant); }
+function utilidadRenglon(d){ return round2(precioFinalRenglon(d) - costoTotalRenglon(d)); }
+function costoTotalFolio(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0)); }
 function gastosDeCR(cr){ return state.gastos.filter(g=>g.crAsignada===cr); }
 function gastosAsignadosTotal(cr){ return gastosDeCR(cr).reduce((s,g)=>s+N(g.costoTotal),0); }
-function utilidadFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0) - gastosAsignadosTotal(cr); }
-function gastoSubtotal(g){ return g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal); }
-function gastoIva(g){ return g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0; }
+// Utilidad PLANEADA: la estimada al cotizar, con los costos capturados en cada renglón (no se mueve con los gastos reales).
+function utilidadFolioPlaneada(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0)); }
+// Utilidad REAL: precio al cliente menos únicamente los gastos reales que se le hayan asignado a esta CR.
+function tieneGastosRealesAsignados(cr){ return gastosDeCR(cr).length>0; }
+function utilidadFolioReal(cr){ return round2(costoTotalFolio(cr) - gastosAsignadosTotal(cr)); }
+function gastoSubtotal(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal)); }
+function gastoIva(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0); }
 function diasCreditoDe(folio){ const c = clienteById(folio.idCliente); return c ? N(c.diasCredito) : 0; }
 function tiempoEntregaTexto(d){ return d.tiempoEntregaValor ? (d.tiempoEntregaValor+" "+(d.tiempoEntregaUnidad||"días")) : "-"; }
 function tiempoEntregaGlobal(dets){
@@ -1139,7 +1146,8 @@ function renderDashboard(){
     return STATUS_FLOW.findIndex(s=>s.key===f.status) >= idxPO;
   }).reduce((s,f)=>s+costoTotalFolio(f.cr),0);
   const finalizadas = state.folios.filter(f=>f.status==="Finalizada");
-  const utilidadFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolio(f.cr),0);
+  const utilidadPlaneadaFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolioPlaneada(f.cr),0);
+  const utilidadRealFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolioReal(f.cr),0);
   const canceladas = state.folios.filter(f=>f.status===CANCEL_KEY).length;
   const pendientesAbiertas = state.acciones.filter(a=>!a.completada).length;
 
@@ -1148,7 +1156,8 @@ function renderDashboard(){
     <div class="stat-card"><div class="label">En proceso</div><div class="value blue">${activos}</div></div>
     <div class="stat-card"><div class="label">Valor en pipeline</div><div class="value blue">${money(pipelineValor)}</div></div>
     <div class="stat-card"><div class="label">Pipeline con OC recibida</div><div class="value" style="color:var(--navy-700)">${money(pipelineConfirmado)}</div></div>
-    <div class="stat-card"><div class="label">Utilidad (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadFinalizadas)}</div></div>
+    <div class="stat-card"><div class="label">Utilidad planeada (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadPlaneadaFinalizadas)}</div></div>
+    <div class="stat-card"><div class="label">Utilidad real (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadRealFinalizadas)}</div></div>
     <div class="stat-card"><div class="label">Finalizadas</div><div class="value">${finalizadas.length}</div></div>
     <div class="stat-card"><div class="label">Canceladas</div><div class="value" style="color:var(--danger)">${canceladas}</div></div>
     <div class="stat-card"><div class="label">Acciones pendientes</div><div class="value">${pendientesAbiertas}</div></div>
@@ -1175,7 +1184,8 @@ function tablaFolios(list){
   const rows = list.map(f=>{
     const cli = clienteById(f.idCliente);
     const total = costoTotalFolio(f.cr);
-    const utilidad = utilidadFolio(f.cr);
+    const uPlaneada = utilidadFolioPlaneada(f.cr);
+    const uReal = tieneGastosRealesAsignados(f.cr) ? money(utilidadFolioReal(f.cr)) : "<span class='muted small'>Sin gastos aún</span>";
     const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
       <td class="cr-code">${f.cr}</td>
@@ -1185,11 +1195,12 @@ function tablaFolios(list){
       <td>${badgeHtml(f.status)}</td>
       <td class="mono">${f.noOC || "<span class='muted'>-</span>"}</td>
       <td class="money right">${money(total)}</td>
-      <td class="money right" style="color:var(--ok)">${money(utilidad)}</td>
+      <td class="money right" style="color:var(--ok)">${money(uPlaneada)}</td>
+      <td class="right" style="color:var(--ok)">${uReal}</td>
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -1886,7 +1897,8 @@ function safeId(cr, rn){ return String(cr).replace(/[^A-Za-z0-9]/g,"_") + "_" + 
 function setText(id, txt){ const el = document.getElementById(id); if(el) el.textContent = txt; }
 function refrescarTotalesFolio(cr){
   setText("costoTotalFolioDisplay", money(costoTotalFolio(cr)));
-  setText("utilidadTotalFolioDisplay", money(utilidadFolio(cr)));
+  setText("utilidadPlaneadaFolioDisplay", money(utilidadFolioPlaneada(cr)));
+  setText("utilidadRealFolioDisplay", tieneGastosRealesAsignados(cr) ? money(utilidadFolioReal(cr)) : "Sin gastos registrados aún");
 }
 function refrescarRenglon(d){
   const sid = safeId(d.cr, d.noRenglon);
@@ -1913,7 +1925,9 @@ function renderDetalle(){
   const cli = clienteById(folio.idCliente);
   const dets = detallesDe(folio.cr);
   const totalFinal = costoTotalFolio(folio.cr);
-  const utilidadTotal = utilidadFolio(folio.cr);
+  const utilidadPlaneada = utilidadFolioPlaneada(folio.cr);
+  const hayGastosReales = tieneGastosRealesAsignados(folio.cr);
+  const utilidadReal = hayGastosReales ? money(utilidadFolioReal(folio.cr)) : "Sin gastos registrados aún";
   const fpp = fechaProbablePago(folio);
   const idx = STATUS_FLOW.findIndex(s=>s.key===folio.status);
   const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
@@ -2077,10 +2091,11 @@ function renderDetalle(){
       ${renglonesHtml}
       <div class="divider"></div>
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
-      <div class="kv" style="font-size:15px;"><span class="k">Utilidad total del folio</span><span class="v money" id="utilidadTotalFolioDisplay" style="color:var(--ok)">${money(utilidadTotal)}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Utilidad planeada <span class="hint">(según costos del renglón)</span></span><span class="v money" id="utilidadPlaneadaFolioDisplay" style="color:var(--ok)">${money(utilidadPlaneada)}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Utilidad real <span class="hint">(precio − gastos reales asignados)</span></span><span class="v money" id="utilidadRealFolioDisplay" style="color:var(--ok)">${utilidadReal}</span></div>
       ${gastosDeCR(folio.cr).length ? `
         <div class="small muted" style="margin-top:8px;">
-          Utilidad ya descuenta ${money(gastosAsignadosTotal(folio.cr))} en gastos asignados a esta CR:
+          La utilidad real ya descuenta ${money(gastosAsignadosTotal(folio.cr))} en gastos asignados a esta CR:
           ${gastosDeCR(folio.cr).map(g=>`${g.concepto} (${money(N(g.costoTotal))})`).join(", ")}.
           <a href="#" data-goto="gastos">Ver en Gastos</a>
         </div>` : ""}
@@ -2784,7 +2799,7 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(clientesAoa), "Clientes");
 
   const encHeaders = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
-    "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Total","QT (folio propuesta)",
+    "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
     "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
     "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
     "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
@@ -2793,7 +2808,8 @@ function exportarWorkbook(){
     const cli = clienteById(f.idCliente);
     const fpp = fechaProbablePago(f);
     return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
-      f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolio(f.cr), qtFolio(f.cr),
+      f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolioPlaneada(f.cr),
+      tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
       f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
       f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
       f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
