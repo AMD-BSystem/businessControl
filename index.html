@@ -1536,7 +1536,7 @@ function opcionesCRGasto(seleccionado){
   }).join("");
   return `<option value="">Ninguna (gasto general del negocio)</option>`+opts;
 }
-document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
+function abrirModalGasto(crPreseleccionada){
   document.getElementById("formGasto").innerHTML = `
     <div class="grid-2">
       <div class="field"><label>Fecha</label><input type="date" id="gf_fecha" value="${todayISO()}"></div>
@@ -1550,7 +1550,7 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
     </div>
     <div class="note" id="gf_preview">Subtotal: $0.00 &middot; IVA: $0.00</div>
     <div class="field"><label>CR asignada <span class="hint">(opcional — si la eliges, este gasto resta directo de la utilidad de esa CR)</span></label>
-      <select id="gf_cr">${opcionesCRGasto("")}</select>
+      <select id="gf_cr">${opcionesCRGasto(crPreseleccionada||"")}</select>
     </div>
     <div class="flex-between">
       <button class="btn btn-outline" id="gf_cancel">Cancelar</button>
@@ -1579,7 +1579,8 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
     showToast("Gasto agregado");
   });
   document.getElementById("modalGasto").classList.add("active");
-});
+}
+document.getElementById("btnNuevoGasto").addEventListener("click", ()=>abrirModalGasto(""));
 
 /* =========================================================================
    BALANCE DEL NEGOCIO
@@ -2093,12 +2094,29 @@ function renderDetalle(){
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad planeada <span class="hint">(según costos del renglón)</span></span><span class="v money" id="utilidadPlaneadaFolioDisplay" style="color:var(--ok)">${money(utilidadPlaneada)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad real <span class="hint">(precio − gastos reales asignados)</span></span><span class="v money" id="utilidadRealFolioDisplay" style="color:var(--ok)">${utilidadReal}</span></div>
+    </div>
+
+    <div class="card">
+      <div class="flex-between">
+        <h3>Gastos reales de esta CR</h3>
+        <button class="btn btn-outline btn-sm" id="btnAgregarGastoCR">+ Agregar gasto a esta CR</button>
+      </div>
       ${gastosDeCR(folio.cr).length ? `
-        <div class="small muted" style="margin-top:8px;">
-          La utilidad real ya descuenta ${money(gastosAsignadosTotal(folio.cr))} en gastos asignados a esta CR:
-          ${gastosDeCR(folio.cr).map(g=>`${g.concepto} (${money(N(g.costoTotal))})`).join(", ")}.
-          <a href="#" data-goto="gastos">Ver en Gastos</a>
-        </div>` : ""}
+        <table class="tbl">
+          <thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Monto</th><th></th></tr></thead>
+          <tbody>
+            ${gastosDeCR(folio.cr).map(g=>`
+              <tr>
+                <td class="mono">${fmtDate(g.fecha)}</td>
+                <td>${g.concepto}</td>
+                <td>${g.proveedor||"-"}</td>
+                <td class="right money">${money(N(g.costoTotal))}</td>
+                <td class="right"><button class="btn btn-outline btn-sm" data-quitargasto="${g.id}">Quitar de esta CR</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="kv" style="margin-top:6px;"><span class="k">Total de gastos reales asignados</span><span class="v money">${money(gastosAsignadosTotal(folio.cr))}</span></div>
+      ` : `<p class="small muted">Sin gastos reales registrados todavía para esta CR — la utilidad real se calculará conforme los vayas agregando.</p>`}
     </div>
 
     <div class="card">
@@ -2230,6 +2248,14 @@ function renderDetalle(){
   });
   cont.querySelectorAll("[data-goto]").forEach(a=>{
     a.addEventListener("click", (e)=>{ e.preventDefault(); goto(a.dataset.goto); });
+  });
+  const btnAgregarGastoCR = document.getElementById("btnAgregarGastoCR");
+  if(btnAgregarGastoCR) btnAgregarGastoCR.addEventListener("click", ()=>abrirModalGasto(folio.cr));
+  cont.querySelectorAll("[data-quitargasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.quitargasto);
+      if(g){ g.crAsignada = ""; markDirty(); render(); showToast("Gasto desasignado de esta CR (sigue en Gastos)"); }
+    });
   });
   const dcEmpresa = document.getElementById("dc_empresa");
   const dcContacto = document.getElementById("dc_contactoSel");
