@@ -418,7 +418,7 @@
 
 <div class="modal-bg" id="modalGasto">
   <div class="modal" style="width:480px;">
-    <h2>Nuevo gasto</h2>
+    <h2 id="gastoModalTitle">Nuevo gasto</h2>
     <p class="sub">El IVA se calcula solo a partir del total (desglosado), a menos que lo desactives.</p>
     <div id="formGasto"></div>
   </div>
@@ -434,9 +434,17 @@
 
 <div class="modal-bg" id="modalInyeccion">
   <div class="modal" style="width:460px;">
-    <h2>Nueva inyección de capital</h2>
+    <h2 id="inyeccionModalTitle">Nueva inyección de capital</h2>
     <p class="sub">Dinero que entra al negocio y no viene de una CR pagada (ej. aportación de socio).</p>
     <div id="formInyeccion"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalPO">
+  <div class="modal">
+    <h2>Generar Orden de Compra (PO)</h2>
+    <p class="sub">Elige el proveedor y los renglones que cubre esta compra. Se genera un PDF y se guarda en OneDrive.</p>
+    <div id="formPO"></div>
   </div>
 </div>
 
@@ -458,7 +466,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Cotización {{NumeroCotizacion}} | AMD Business Services</title>
+  <title>{{TituloDocumento}} {{NumeroCotizacion}} | AMD Business Services</title>
   <style>
     @page { size: Letter; margin: 0.28in; }
     * { box-sizing: border-box; }
@@ -477,9 +485,9 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
 " alt="AMD Business Services" style="display:block; max-width:260px; max-height:90px; margin-bottom:8px;" />
           </td>
           <td align="right" style="width:42%; vertical-align:top;">
-            <div style="font-size:25px; font-weight:800; letter-spacing:.4px;">COTIZACIÓN</div>
+            <div style="font-size:25px; font-weight:800; letter-spacing:.4px;">{{TituloDocumento}}</div>
             <div style="margin-top:7px; display:inline-block; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.25); border-radius:10px; padding:9px 12px; text-align:left;">
-              <div style="font-size:11px; opacity:.85;">No. Cotización</div>
+              <div style="font-size:11px; opacity:.85;">{{EtiquetaFolio}}</div>
               <div style="font-size:18px; font-weight:700;">{{NumeroCotizacion}}</div>
             </div>
           </td>
@@ -491,7 +499,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
       <table width="100%" cellspacing="0" cellpadding="0" border="0">
         <tr>
           <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Fecha</div><div style="font-size:14px; font-weight:700;">{{Fecha}}</div></div></td>
-          <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Vigencia</div><div style="font-size:14px; font-weight:700;">{{Vigencia}}</div></div></td>
+          <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">{{EtiquetaVigencia}}</div><div style="font-size:14px; font-weight:700;">{{Vigencia}}</div></div></td>
           <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Moneda</div><div style="font-size:14px; font-weight:700;">{{Moneda}}</div></div></td>
         </tr>
       </table>
@@ -502,8 +510,8 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
         <tr>
           <td style="width:50%; vertical-align:top; padding:4px;">
             <div class="no-break" style="border:1px solid #dbe3ef; border-radius:11px; overflow:hidden;">
-              <div style="background:#0b2545; color:#fff; padding:8px 12px; font-size:12px; font-weight:800;">DATOS DEL CLIENTE</div>
-              <div style="padding:10px 12px; line-height:1.45; font-size:12px;"><strong>Empresa:</strong> {{Empresa}}<br /><strong>Contacto:</strong> {{Contacto}}<br /><strong>Correo:</strong> {{Correo}}<br /><strong>Entrega en:</strong> {{EntregaEn}}</div>
+              <div style="background:#0b2545; color:#fff; padding:8px 12px; font-size:12px; font-weight:800;">{{TituloDestinatario}}</div>
+              <div style="padding:10px 12px; line-height:1.45; font-size:12px;"><strong>Empresa:</strong> {{Empresa}}<br /><strong>Contacto:</strong> {{Contacto}}<br /><strong>Correo:</strong> {{Correo}}<br /><strong>{{EtiquetaDireccion}}:</strong> {{EntregaEn}}</div>
             </div>
           </td>
           <td style="width:50%; vertical-align:top; padding:4px;">
@@ -593,6 +601,7 @@ let state = {
   proveedores: [],
   ingresos: [],
   inyecciones: [],
+  pos: [],
   config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
 };
 let loadedFileName = null;
@@ -975,6 +984,46 @@ async function guardarPdfBlob(blob, filename){
   showToast("No se pudo guardar en OneDrive; se descargó el PDF normal.", true);
 }
 
+const PO_FOLDER_SHARE_URL = "https://1drv.ms/f/c/5d74b477fff6ebb3/IgBK-HEuEVxoSbhfmWK_vBceAa9_YaV6xOTmLhYT8To0hm8?e=UzZX3w";
+let poFolderRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
+async function resolverCarpetaPOs(){
+  if(poFolderRef) return poFolderRef;
+  if(!PO_FOLDER_SHARE_URL) return null;
+  try{
+    const token = codificarShareToken(PO_FOLDER_SHARE_URL);
+    const res = await graphFetch(`/shares/${token}/driveItem`);
+    const item = await res.json();
+    if(item && item.folder){
+      poFolderRef = { driveId: item.parentReference.driveId, itemId: item.id };
+      return poFolderRef;
+    }
+  }catch(err){ console.warn("No se pudo resolver la carpeta de POs en OneDrive", err); }
+  return null;
+}
+async function guardarPOBlob(blob, filename){
+  try{
+    const ref = await resolverCarpetaPOs();
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("PO guardada en OneDrive (7_AMD POs): "+filename);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó el PDF de la PO normal.", true);
+}
+
 /* =========================================================================
    HELPERS
    ========================================================================= */
@@ -994,6 +1043,16 @@ function nextFolio(){
   return prefix+String(count+1).padStart(3,"0");
 }
 function qtFolio(cr){ return cr.replace("CR-","QT-"); }
+function nextPOFolio(){
+  const d = new Date();
+  const yy = String(d.getFullYear()).slice(-2);
+  const mm = String(d.getMonth()+1).padStart(2,"0");
+  const prefix = "PO-"+yy+mm;
+  const count = state.pos.filter(p=>p.folio.startsWith(prefix)).length;
+  return prefix+String(count+1).padStart(3,"0");
+}
+function posDeCR(cr){ return state.pos.filter(p=>p.cr===cr); }
+function totalPO(po){ return round2((po.items||[]).reduce((s,it)=>s+N(it.costoUnitario)*N(it.cantidad),0)); }
 
 function normalizeLetters(s){ return (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Za-z]/g,""); }
 function letras3(empresa){ const l = normalizeLetters(empresa).toUpperCase(); return (l.slice(0,3) || "XXX").padEnd(3,"X"); }
@@ -1511,13 +1570,22 @@ function renderGastos(){
       <td class="right mono">${g.ivaAplica!==false?money(gastoIva(g)):"NA"}</td>
       <td class="right money">${money(g.costoTotal)}</td>
       <td><select data-gastocr="${g.id}" style="width:auto; min-width:150px;">${opcionesCRGasto(g.crAsignada||"")}</select></td>
-      <td class="right"><button class="btn btn-outline btn-sm" data-delgasto="${g.id}">Eliminar</button></td>
+      <td class="right" style="white-space:nowrap;">
+        <button class="btn btn-outline btn-sm" data-editgasto="${g.id}">Editar</button>
+        <button class="btn btn-outline btn-sm" data-delgasto="${g.id}">Eliminar</button>
+      </td>
     </tr>`).join("");
   wrap.innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th>CR asignada</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   wrap.querySelectorAll("[data-gastocr]").forEach(sel=>{
     sel.addEventListener("change", ()=>{
       const g = state.gastos.find(x=>x.id===sel.dataset.gastocr);
       if(g){ g.crAsignada = sel.value; markDirty(); render(); }
+    });
+  });
+  wrap.querySelectorAll("[data-editgasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.editgasto);
+      if(g) abrirModalGasto(null, g);
     });
   });
   wrap.querySelectorAll("[data-delgasto]").forEach(btn=>{
@@ -1536,31 +1604,33 @@ function opcionesCRGasto(seleccionado){
   }).join("");
   return `<option value="">Ninguna (gasto general del negocio)</option>`+opts;
 }
-function abrirModalGasto(crPreseleccionada){
+function abrirModalGasto(crPreseleccionada, gastoExistente){
+  document.getElementById("gastoModalTitle").textContent = gastoExistente ? "Editar gasto" : "Nuevo gasto";
   document.getElementById("formGasto").innerHTML = `
     <div class="grid-2">
-      <div class="field"><label>Fecha</label><input type="date" id="gf_fecha" value="${todayISO()}"></div>
-      <div class="field"><label>Proveedor</label><input id="gf_prov"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="gf_fecha" value="${gastoExistente?gastoExistente.fecha:todayISO()}"></div>
+      <div class="field"><label>Proveedor</label><input id="gf_prov" value="${gastoExistente?gastoExistente.proveedor||"":""}"></div>
     </div>
-    <div class="field"><label>Concepto</label><input id="gf_concepto"></div>
+    <div class="field"><label>Concepto</label><input id="gf_concepto" value="${gastoExistente?gastoExistente.concepto||"":""}"></div>
     <div class="field">
       <label>Costo total del gasto (IVA incluido)</label>
-      <input type="number" step="0.01" id="gf_total" placeholder="0.00">
-      <label class="checkbox-row"><input type="checkbox" id="gf_ivaaplica" checked> Desglosar IVA (16%) automáticamente</label>
+      <input type="number" step="0.01" id="gf_total" placeholder="0.00" value="${gastoExistente?N(gastoExistente.costoTotal):""}">
+      <label class="checkbox-row"><input type="checkbox" id="gf_ivaaplica" ${!gastoExistente||gastoExistente.ivaAplica!==false?"checked":""}> Desglosar IVA (16%) automáticamente</label>
     </div>
     <div class="note" id="gf_preview">Subtotal: $0.00 &middot; IVA: $0.00</div>
     <div class="field"><label>CR asignada <span class="hint">(opcional — si la eliges, este gasto resta directo de la utilidad de esa CR)</span></label>
-      <select id="gf_cr">${opcionesCRGasto(crPreseleccionada||"")}</select>
+      <select id="gf_cr">${opcionesCRGasto(gastoExistente?(gastoExistente.crAsignada||""):(crPreseleccionada||""))}</select>
     </div>
     <div class="flex-between">
       <button class="btn btn-outline" id="gf_cancel">Cancelar</button>
-      <button class="btn btn-primary" id="gf_save">Guardar gasto</button>
+      <button class="btn btn-primary" id="gf_save">${gastoExistente?"Guardar cambios":"Guardar gasto"}</button>
     </div>
   `;
   const actualizarPreview = ()=>{
     const g = {costoTotal: document.getElementById("gf_total").value, ivaAplica: document.getElementById("gf_ivaaplica").checked};
     document.getElementById("gf_preview").textContent = "Subtotal: "+money(gastoSubtotal(g))+" · IVA: "+(g.ivaAplica?money(gastoIva(g)):"NA");
   };
+  actualizarPreview();
   document.getElementById("gf_total").addEventListener("input", actualizarPreview);
   document.getElementById("gf_ivaaplica").addEventListener("change", actualizarPreview);
   document.getElementById("gf_cancel").addEventListener("click", cerrarModales);
@@ -1569,14 +1639,15 @@ function abrirModalGasto(crPreseleccionada){
     const total = document.getElementById("gf_total").value;
     if(!concepto){ showToast("Escribe el concepto del gasto", true); return; }
     if(!total || N(total)<=0){ showToast("Captura el costo total del gasto", true); return; }
-    state.gastos.push({
-      id: uid("GA"), fecha: document.getElementById("gf_fecha").value || todayISO(),
+    const datos = {
+      fecha: document.getElementById("gf_fecha").value || todayISO(),
       concepto, proveedor: document.getElementById("gf_prov").value.trim(),
       costoTotal: N(total), ivaAplica: document.getElementById("gf_ivaaplica").checked,
       crAsignada: document.getElementById("gf_cr").value
-    });
+    };
+    if(gastoExistente){ Object.assign(gastoExistente, datos); } else { state.gastos.push({id: uid("GA"), ...datos}); }
     cerrarModales(); markDirty(); render();
-    showToast("Gasto agregado");
+    showToast(gastoExistente ? "Gasto actualizado" : "Gasto agregado");
   });
   document.getElementById("modalGasto").classList.add("active");
 }
@@ -1647,9 +1718,15 @@ function renderBalance(){
       <td><span class="badge ${m.tipo==='Gasto'?'prio-alta':'prio-deseable'}">${m.tipo}</span></td>
       <td>${m.concepto}</td>
       <td class="right money" style="color:${m.monto>=0?'var(--ok)':'var(--danger)'}">${m.monto>=0?"+":""}${money(m.monto)}</td>
-      <td class="right">${m.borrable?`<button class="btn btn-outline btn-sm" data-delinyeccion="${m.id}">Eliminar</button>`:""}</td>
+      <td class="right" style="white-space:nowrap;">${m.borrable?`<button class="btn btn-outline btn-sm" data-editinyeccion="${m.id}">Editar</button> <button class="btn btn-outline btn-sm" data-delinyeccion="${m.id}">Eliminar</button>`:""}</td>
     </tr>`).join("");
   document.getElementById("balanceMovimientosWrap").innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="right">Monto</th><th></th></tr></thead><tbody>${filasMov}</tbody></table>`;
+  document.getElementById("balanceMovimientosWrap").querySelectorAll("[data-editinyeccion]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const i = state.inyecciones.find(x=>x.id===btn.dataset.editinyeccion);
+      if(i) abrirModalInyeccion(i);
+    });
+  });
   document.getElementById("balanceMovimientosWrap").querySelectorAll("[data-delinyeccion]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       state.inyecciones = state.inyecciones.filter(i=>i.id!==btn.dataset.delinyeccion);
@@ -1657,17 +1734,18 @@ function renderBalance(){
     });
   });
 }
-document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>{
+function abrirModalInyeccion(inyeccionExistente){
+  document.getElementById("inyeccionModalTitle").textContent = inyeccionExistente ? "Editar inyección de capital" : "Nueva inyección de capital";
   document.getElementById("formInyeccion").innerHTML = `
-    <div class="field"><label>Nombre de quien hace la inyección</label><input id="iny_nombre"></div>
+    <div class="field"><label>Nombre de quien hace la inyección</label><input id="iny_nombre" value="${inyeccionExistente?inyeccionExistente.nombre||"":""}"></div>
     <div class="grid-2">
-      <div class="field"><label>Fecha</label><input type="date" id="iny_fecha" value="${todayISO()}"></div>
-      <div class="field"><label>Monto</label><input type="number" step="0.01" id="iny_monto" placeholder="0.00"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="iny_fecha" value="${inyeccionExistente?inyeccionExistente.fecha:todayISO()}"></div>
+      <div class="field"><label>Monto</label><input type="number" step="0.01" id="iny_monto" placeholder="0.00" value="${inyeccionExistente?N(inyeccionExistente.monto):""}"></div>
     </div>
-    <div class="field"><label>Notas <span class="hint">(opcional)</span></label><textarea id="iny_notas"></textarea></div>
+    <div class="field"><label>Notas <span class="hint">(opcional)</span></label><textarea id="iny_notas">${inyeccionExistente?inyeccionExistente.notas||"":""}</textarea></div>
     <div class="flex-between">
       <button class="btn btn-outline" id="iny_cancel">Cancelar</button>
-      <button class="btn btn-primary" id="iny_save">Guardar inyección</button>
+      <button class="btn btn-primary" id="iny_save">${inyeccionExistente?"Guardar cambios":"Guardar inyección"}</button>
     </div>
   `;
   document.getElementById("iny_cancel").addEventListener("click", cerrarModales);
@@ -1676,15 +1754,17 @@ document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>{
     const monto = document.getElementById("iny_monto").value;
     if(!nombre){ showToast("Escribe el nombre de quien hace la inyección", true); return; }
     if(!monto || N(monto)<=0){ showToast("Captura el monto de la inyección", true); return; }
-    state.inyecciones.push({
-      id: uid("IY"), nombre, fecha: document.getElementById("iny_fecha").value || todayISO(),
+    const datos = {
+      nombre, fecha: document.getElementById("iny_fecha").value || todayISO(),
       monto: N(monto), notas: document.getElementById("iny_notas").value.trim()
-    });
+    };
+    if(inyeccionExistente){ Object.assign(inyeccionExistente, datos); } else { state.inyecciones.push({id: uid("IY"), ...datos}); }
     cerrarModales(); markDirty(); renderBalance();
-    showToast("Inyección agregada");
+    showToast(inyeccionExistente ? "Inyección actualizada" : "Inyección agregada");
   });
   document.getElementById("modalInyeccion").classList.add("active");
-});
+}
+document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>abrirModalInyeccion(null));
 
 /* =========================================================================
    CONFIGURACIÓN
@@ -2111,13 +2191,45 @@ function renderDetalle(){
                 <td>${g.concepto}</td>
                 <td>${g.proveedor||"-"}</td>
                 <td class="right money">${money(N(g.costoTotal))}</td>
-                <td class="right"><button class="btn btn-outline btn-sm" data-quitargasto="${g.id}">Quitar de esta CR</button></td>
+                <td class="right" style="white-space:nowrap;">
+                  <button class="btn btn-outline btn-sm" data-editgasto="${g.id}">Editar</button>
+                  <button class="btn btn-outline btn-sm" data-quitargasto="${g.id}">Quitar de esta CR</button>
+                </td>
               </tr>`).join("")}
           </tbody>
         </table>
         <div class="kv" style="margin-top:6px;"><span class="k">Total de gastos reales asignados</span><span class="v money">${money(gastosAsignadosTotal(folio.cr))}</span></div>
       ` : `<p class="small muted">Sin gastos reales registrados todavía para esta CR — la utilidad real se calculará conforme los vayas agregando.</p>`}
     </div>
+
+    ${folio.noOC ? `
+    <div class="card">
+      <div class="flex-between">
+        <h3>Órdenes de compra a proveedores</h3>
+        <button class="btn btn-outline btn-sm" id="btnGenerarPO">+ Generar PO a proveedor</button>
+      </div>
+      ${posDeCR(folio.cr).length ? `
+        <table class="tbl">
+          <thead><tr><th>PO</th><th>Proveedor</th><th>Fecha</th><th class="right">Total</th><th></th></tr></thead>
+          <tbody>
+            ${posDeCR(folio.cr).map(po=>{
+              const prov = proveedorById(po.idProveedor);
+              return `<tr>
+                <td class="mono">${po.folio}</td>
+                <td>${prov?prov.nombreComercial:"(proveedor eliminado)"}</td>
+                <td class="mono">${fmtDate(po.fecha)}</td>
+                <td class="right money">${money(totalPO(po))}</td>
+                <td class="right"><button class="btn btn-outline btn-sm" data-regenerarpo="${po.folio}">Volver a generar PDF</button></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      ` : `<p class="small muted">Aún no se ha generado ninguna PO para esta CR.</p>`}
+    </div>` : `
+    <div class="card">
+      <h3>Órdenes de compra a proveedores</h3>
+      <p class="small muted">Disponible en cuanto captures el número de OC del cliente.</p>
+    </div>`}
 
     <div class="card">
       <h3>Fechas de trazabilidad (ajuste manual si es necesario)</h3>
@@ -2251,10 +2363,24 @@ function renderDetalle(){
   });
   const btnAgregarGastoCR = document.getElementById("btnAgregarGastoCR");
   if(btnAgregarGastoCR) btnAgregarGastoCR.addEventListener("click", ()=>abrirModalGasto(folio.cr));
+  cont.querySelectorAll("[data-editgasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.editgasto);
+      if(g) abrirModalGasto(null, g);
+    });
+  });
   cont.querySelectorAll("[data-quitargasto]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const g = state.gastos.find(x=>x.id===btn.dataset.quitargasto);
       if(g){ g.crAsignada = ""; markDirty(); render(); showToast("Gasto desasignado de esta CR (sigue en Gastos)"); }
+    });
+  });
+  const btnGenerarPO = document.getElementById("btnGenerarPO");
+  if(btnGenerarPO) btnGenerarPO.addEventListener("click", ()=>abrirModalPO(folio));
+  cont.querySelectorAll("[data-regenerarpo]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const po = state.pos.find(p=>p.folio===btn.dataset.regenerarpo);
+      if(po) await generarPOPDF(po, proveedorById(po.idProveedor), folio);
     });
   });
   const dcEmpresa = document.getElementById("dc_empresa");
@@ -2391,6 +2517,11 @@ function construirHtmlPropuesta(folio, cli, dets){
   const ivaMonto = subtotal*ivaPct;
   const total = subtotal+ivaMonto;
   const map = {
+    TituloDocumento: "COTIZACIÓN",
+    EtiquetaFolio: "No. Cotización",
+    TituloDestinatario: "DATOS DEL CLIENTE",
+    EtiquetaDireccion: "Entrega en",
+    EtiquetaVigencia: "Vigencia",
     NumeroCotizacion: qtFolio(folio.cr),
     Fecha: fmtDate(todayISO()),
     Vigencia: state.config.vigencia || "15 días",
@@ -2472,6 +2603,152 @@ async function generarPropuestaPDF(folio, cli, dets){
     console.error(err);
     showToast("No se pudo generar el PDF. Revisa la consola.", true);
   }
+}
+
+/* =========================================================================
+   PO (ORDEN DE COMPRA) A PROVEEDORES — reutiliza la misma plantilla visual
+   de la cotización, con otras etiquetas y los costos que pagamos nosotros.
+   ========================================================================= */
+function construirFilasItemsPO(items){
+  return items.map((it,idx)=>{
+    const subtotal = round2(N(it.costoUnitario) * N(it.cantidad));
+    return `<tr style="border-bottom:1px solid #e5e7eb;">
+      <td align="center" style="padding:7px 6px;">${idx+1}</td>
+      <td align="center" style="padding:7px 6px;">${it.cantidad}</td>
+      <td align="center" style="padding:7px 6px;">PZA</td>
+      <td style="padding:7px 6px;">${it.descripcion}${it.numeroParte?(" ("+it.numeroParte+")"):""}</td>
+      <td align="center" style="padding:7px 6px;">${it.entrega||"-"}</td>
+      <td align="right" style="padding:7px 6px;">${money(it.costoUnitario)}</td>
+      <td align="right" style="padding:7px 6px;">${money(subtotal)}</td>
+    </tr>`;
+  }).join("");
+}
+function construirHtmlPO(po, proveedor, folio){
+  const subtotal = totalPO(po);
+  const ivaMonto = round2(subtotal*0.16);
+  const total = round2(subtotal+ivaMonto);
+  const map = {
+    TituloDocumento: "ORDEN DE COMPRA",
+    EtiquetaFolio: "No. Orden de Compra",
+    TituloDestinatario: "DATOS DEL PROVEEDOR",
+    EtiquetaDireccion: "Dirección",
+    EtiquetaVigencia: "Ref. CR",
+    NumeroCotizacion: po.folio,
+    Fecha: fmtDate(po.fecha),
+    Vigencia: folio.cr,
+    Moneda: "MXN",
+    Empresa: proveedor?proveedor.nombreComercial:"",
+    Contacto: proveedor?proveedor.contacto||"":"",
+    Correo: proveedor?proveedor.correo||"":"",
+    Telefono: proveedor?proveedor.telefono||"":"",
+    EntregaEn: (proveedor && proveedor.direccion) ? proveedor.direccion : "-",
+    FormaPago: state.config.formaPago || "-",
+    TiempoEntrega: (po.items.map(it=>it.entrega).find(Boolean)) || "-",
+    CondicionEntrega: state.config.condicionEntrega || "-",
+    IVA: "16%",
+    ItemsTable: construirFilasItemsPO(po.items),
+    CondicionesComerciales: (po.notas || "Favor de confirmar recepción y tiempo de entrega de esta orden de compra.").replace(/\n/g,"<br/>"),
+    Subtotal: money(subtotal),
+    IVAAmount: money(ivaMonto),
+    Total: money(total),
+    CorreoAMD: state.config.empresaCorreo || "",
+    TelefonoAMD: state.config.empresaTelefono || ""
+  };
+  let html = PDF_TEMPLATE;
+  Object.keys(map).forEach(k=>{ html = html.split("{{"+k+"}}").join(String(map[k])); });
+  return html;
+}
+async function generarPOPDF(po, proveedor, folio){
+  showToast("Generando PDF de la PO...");
+  try{
+    const htmlDoc = construirHtmlPO(po, proveedor, folio);
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-99999px";
+    iframe.style.top = "0";
+    iframe.style.width = "850px";
+    iframe.style.height = "1100px";
+    document.body.appendChild(iframe);
+    await new Promise(resolve=>{
+      iframe.onload = resolve;
+      iframe.srcdoc = htmlDoc;
+    });
+    await new Promise(r=>setTimeout(r, 80));
+    const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
+    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
+    document.body.removeChild(iframe);
+
+    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({unit:"pt", format:"letter"});
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth;
+    const imgHeight = canvas.height * imgWidth / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+    const TOLERANCIA = 12;
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+    while(heightLeft > TOLERANCIA){
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+    const pdfBlob = pdf.output("blob");
+    await guardarPOBlob(pdfBlob, po.folio+".pdf");
+    showToast("PO "+po.folio+" generada");
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo generar el PDF de la PO. Revisa la consola.", true);
+  }
+}
+function abrirModalPO(folio){
+  if(state.proveedores.length===0){
+    showToast("Primero agrega al menos un proveedor", true);
+    goto("proveedores");
+    return;
+  }
+  const dets = detallesDe(folio.cr);
+  const proveedoresOrdenados = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial));
+  document.getElementById("formPO").innerHTML = `
+    <div class="field"><label>Proveedor</label>
+      <select id="po_proveedor"><option value="">Selecciona...</option>${proveedoresOrdenados.map(p=>`<option value="${p.id}">${p.nombreComercial}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Renglones a incluir en esta PO</label>
+      ${dets.map(d=>`
+        <label class="checkbox-row" style="margin-bottom:8px; align-items:flex-start;">
+          <input type="checkbox" data-poitem="${d.noRenglon}" checked style="margin-top:2px;">
+          <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))}/pza</span>
+        </label>`).join("")}
+    </div>
+    <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas"></textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-outline" id="po_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="po_save">Generar PO y PDF</button>
+    </div>
+  `;
+  document.getElementById("po_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("po_save").addEventListener("click", async ()=>{
+    const idProveedor = document.getElementById("po_proveedor").value;
+    if(!idProveedor){ showToast("Selecciona el proveedor", true); return; }
+    const seleccionados = Array.from(document.querySelectorAll("[data-poitem]:checked")).map(chk=>N(chk.dataset.poitem));
+    if(seleccionados.length===0){ showToast("Selecciona al menos un renglón", true); return; }
+    const items = dets.filter(d=>seleccionados.includes(d.noRenglon)).map(d=>({
+      descripcion: d.descripcion, numeroParte: d.numeroParte, cantidad: N(d.cantidad)||1,
+      costoUnitario: N(d.costoArticulo), entrega: tiempoEntregaTexto(d)
+    }));
+    const po = {
+      folio: nextPOFolio(), cr: folio.cr, idProveedor, fecha: todayISO(),
+      items, notas: document.getElementById("po_notas").value.trim()
+    };
+    state.pos.push(po);
+    cerrarModales(); markDirty();
+    await generarPOPDF(po, proveedorById(idProveedor), folio);
+    renderDetalle();
+  });
+  document.getElementById("modalPO").classList.add("active");
 }
 
 function tablaItemsPlano(dets){
@@ -2627,7 +2904,7 @@ function excelSerialToISO(v){
 }
 
 function importarWorkbook(wb){
-  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[],
+  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[], pos:[],
     config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:""}};
 
   if(wb.SheetNames.includes("Clientes")){
@@ -2751,6 +3028,28 @@ function importarWorkbook(wb){
       });
     });
   }
+  if(wb.SheetNames.includes("POs_Encabezado")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["POs_Encabezado"], "PO (folio)");
+    filas.forEach(r=>{
+      state.pos.push({
+        folio:String(col(r,map,"PO (folio)")), cr:String(col(r,map,"CR")),
+        idProveedor:String(col(r,map,"ID_Proveedor")), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        notas:col(r,map,"Notas"), items:[]
+      });
+    });
+  }
+  if(wb.SheetNames.includes("POs_Detalle")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["POs_Detalle"], "PO (folio)");
+    filas.forEach(r=>{
+      const po = state.pos.find(p=>p.folio===String(col(r,map,"PO (folio)")));
+      if(!po) return;
+      po.items.push({
+        descripcion:col(r,map,"Descripción"), numeroParte:col(r,map,"Número de Parte"),
+        cantidad:N(col(r,map,"Cantidad"))||1, costoUnitario:N(col(r,map,"Costo Unitario")),
+        entrega:col(r,map,"Entrega")
+      });
+    });
+  }
   if(wb.SheetNames.includes("Config")){
     const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Config"], "Llave");
     filas.forEach(r=>{
@@ -2805,6 +3104,10 @@ function limpiarDatosResiduales(){
   const inyeccionesVistas = new Map();
   state.inyecciones.forEach(i=>inyeccionesVistas.set(i.id, i));
   state.inyecciones = [...inyeccionesVistas.values()];
+
+  const posVistas = new Map();
+  state.pos.forEach(p=>posVistas.set(p.folio, p));
+  state.pos = [...posVistas.values()];
 }
 
 /* =========================================================================
@@ -2886,6 +3189,21 @@ function exportarWorkbook(){
     ...state.inyecciones.map(i=>[i.id, i.nombre, i.fecha, N(i.monto), i.notas])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inyAoa), "Inyecciones");
+
+  const poEncAoa = [
+    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Notas","Total"],
+    ...state.pos.map(po=>{
+      const prov = proveedorById(po.idProveedor);
+      return [po.folio, po.cr, po.idProveedor, prov?prov.nombreComercial:"", po.fecha, po.notas||"", totalPO(po)];
+    })
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poEncAoa), "POs_Encabezado");
+
+  const poDetAoa = [
+    ["PO (folio)","No. Renglón","Descripción","Número de Parte","Cantidad","Costo Unitario","Entrega"],
+    ...state.pos.flatMap(po=>(po.items||[]).map((it,idx)=>[po.folio, idx+1, it.descripcion, it.numeroParte||"", it.cantidad, it.costoUnitario, it.entrega||""]))
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poDetAoa), "POs_Detalle");
 
   const cfgAoa = [
     ["Llave","Valor"],
