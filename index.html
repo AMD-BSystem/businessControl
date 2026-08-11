@@ -1052,7 +1052,11 @@ function nextPOFolio(){
   return prefix+String(count+1).padStart(3,"0");
 }
 function posDeCR(cr){ return state.pos.filter(p=>p.cr===cr); }
-function totalPO(po){ return round2((po.items||[]).reduce((s,it)=>s+N(it.costoUnitario)*N(it.cantidad),0)); }
+function costoUnitarioPO(it, moneda){ return moneda==="USD" ? N(it.costoUnitarioUSD) : N(it.costoUnitarioMXN); }
+function totalPO(po){
+  const moneda = po.moneda||"MXN";
+  return round2((po.items||[]).reduce((s,it)=>s+costoUnitarioPO(it,moneda)*N(it.cantidad),0));
+}
 
 function normalizeLetters(s){ return (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Za-z]/g,""); }
 function letras3(empresa){ const l = normalizeLetters(empresa).toUpperCase(); return (l.slice(0,3) || "XXX").padEnd(3,"X"); }
@@ -2218,7 +2222,7 @@ function renderDetalle(){
                 <td class="mono">${po.folio}</td>
                 <td>${prov?prov.nombreComercial:"(proveedor eliminado)"}</td>
                 <td class="mono">${fmtDate(po.fecha)}</td>
-                <td class="right money">${money(totalPO(po))}</td>
+                <td class="right money">${money(totalPO(po))} ${po.moneda||"MXN"}</td>
                 <td class="right"><button class="btn btn-outline btn-sm" data-regenerarpo="${po.folio}">Volver a generar PDF</button></td>
               </tr>`;
             }).join("")}
@@ -2609,23 +2613,26 @@ async function generarPropuestaPDF(folio, cli, dets){
    PO (ORDEN DE COMPRA) A PROVEEDORES — reutiliza la misma plantilla visual
    de la cotización, con otras etiquetas y los costos que pagamos nosotros.
    ========================================================================= */
-function construirFilasItemsPO(items){
+function construirFilasItemsPO(items, moneda){
   return items.map((it,idx)=>{
-    const subtotal = round2(N(it.costoUnitario) * N(it.cantidad));
+    const costoUnitario = costoUnitarioPO(it, moneda);
+    const subtotal = round2(costoUnitario * N(it.cantidad));
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td align="center" style="padding:7px 6px;">${idx+1}</td>
       <td align="center" style="padding:7px 6px;">${it.cantidad}</td>
       <td align="center" style="padding:7px 6px;">PZA</td>
       <td style="padding:7px 6px;">${it.descripcion}${it.numeroParte?(" ("+it.numeroParte+")"):""}</td>
       <td align="center" style="padding:7px 6px;">${it.entrega||"-"}</td>
-      <td align="right" style="padding:7px 6px;">${money(it.costoUnitario)}</td>
+      <td align="right" style="padding:7px 6px;">${money(costoUnitario)}</td>
       <td align="right" style="padding:7px 6px;">${money(subtotal)}</td>
     </tr>`;
   }).join("");
 }
 function construirHtmlPO(po, proveedor, folio){
+  const moneda = po.moneda || "MXN";
+  const ivaPct = (po.ivaPct!==undefined && po.ivaPct!==null && po.ivaPct!=="") ? N(po.ivaPct) : 16;
   const subtotal = totalPO(po);
-  const ivaMonto = round2(subtotal*0.16);
+  const ivaMonto = round2(subtotal*(ivaPct/100));
   const total = round2(subtotal+ivaMonto);
   const map = {
     TituloDocumento: "ORDEN DE COMPRA",
@@ -2636,17 +2643,17 @@ function construirHtmlPO(po, proveedor, folio){
     NumeroCotizacion: po.folio,
     Fecha: fmtDate(po.fecha),
     Vigencia: folio.cr,
-    Moneda: "MXN",
+    Moneda: moneda,
     Empresa: proveedor?proveedor.nombreComercial:"",
     Contacto: proveedor?proveedor.contacto||"":"",
     Correo: proveedor?proveedor.correo||"":"",
     Telefono: proveedor?proveedor.telefono||"":"",
     EntregaEn: (proveedor && proveedor.direccion) ? proveedor.direccion : "-",
-    FormaPago: state.config.formaPago || "-",
-    TiempoEntrega: (po.items.map(it=>it.entrega).find(Boolean)) || "-",
-    CondicionEntrega: state.config.condicionEntrega || "-",
-    IVA: "16%",
-    ItemsTable: construirFilasItemsPO(po.items),
+    FormaPago: po.formaPago || "-",
+    TiempoEntrega: po.tiempoEntrega || "-",
+    CondicionEntrega: po.condicionEntrega || "-",
+    IVA: ivaPct+"%",
+    ItemsTable: construirFilasItemsPO(po.items, moneda),
     CondicionesComerciales: (po.notas || "Favor de confirmar recepción y tiempo de entrega de esta orden de compra.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
     IVAAmount: money(ivaMonto),
@@ -2712,6 +2719,7 @@ function abrirModalPO(folio){
   }
   const dets = detallesDe(folio.cr);
   const proveedoresOrdenados = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial));
+  const tiempoSugerido = dets.length ? tiempoEntregaTexto(dets[0]) : "";
   document.getElementById("formPO").innerHTML = `
     <div class="field"><label>Proveedor</label>
       <select id="po_proveedor"><option value="">Selecciona...</option>${proveedoresOrdenados.map(p=>`<option value="${p.id}">${p.nombreComercial}</option>`).join("")}</select>
@@ -2720,8 +2728,23 @@ function abrirModalPO(folio){
       ${dets.map(d=>`
         <label class="checkbox-row" style="margin-bottom:8px; align-items:flex-start;">
           <input type="checkbox" data-poitem="${d.noRenglon}" checked style="margin-top:2px;">
-          <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))}/pza</span>
+          <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))} MXN/pza${d.costoArticuloUSD?(" ("+money(N(d.costoArticuloUSD))+" USD/pza)"):""}</span>
         </label>`).join("")}
+    </div>
+    <div class="field"><label>Moneda a mostrar en la PO</label>
+      <select id="po_moneda">
+        <option value="MXN">Pesos (MXN)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+      <span class="hint">Si un renglón no tiene costo en USD capturado, se calcula con el tipo de cambio de esta CR.</span>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Forma de pago</label><input id="po_formapago" value="${state.config.formaPago||""}"></div>
+      <div class="field"><label>Tiempo de entrega</label><input id="po_tiempoentrega" value="${tiempoSugerido}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Condición de entrega</label><input id="po_condicionentrega" value="${state.config.condicionEntrega||""}"></div>
+      <div class="field"><label>% IVA</label><input type="number" step="0.01" id="po_iva" value="16"></div>
     </div>
     <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas"></textarea></div>
     <div class="flex-between">
@@ -2737,10 +2760,17 @@ function abrirModalPO(folio){
     if(seleccionados.length===0){ showToast("Selecciona al menos un renglón", true); return; }
     const items = dets.filter(d=>seleccionados.includes(d.noRenglon)).map(d=>({
       descripcion: d.descripcion, numeroParte: d.numeroParte, cantidad: N(d.cantidad)||1,
-      costoUnitario: N(d.costoArticulo), entrega: tiempoEntregaTexto(d)
+      costoUnitarioMXN: N(d.costoArticulo),
+      costoUnitarioUSD: d.costoArticuloUSD ? N(d.costoArticuloUSD) : round2(N(d.costoArticulo)/(N(folio.tipoCambio)||18)),
+      entrega: tiempoEntregaTexto(d)
     }));
     const po = {
       folio: nextPOFolio(), cr: folio.cr, idProveedor, fecha: todayISO(),
+      moneda: document.getElementById("po_moneda").value,
+      formaPago: document.getElementById("po_formapago").value.trim(),
+      tiempoEntrega: document.getElementById("po_tiempoentrega").value.trim(),
+      condicionEntrega: document.getElementById("po_condicionentrega").value.trim(),
+      ivaPct: N(document.getElementById("po_iva").value),
       items, notas: document.getElementById("po_notas").value.trim()
     };
     state.pos.push(po);
@@ -3034,6 +3064,10 @@ function importarWorkbook(wb){
       state.pos.push({
         folio:String(col(r,map,"PO (folio)")), cr:String(col(r,map,"CR")),
         idProveedor:String(col(r,map,"ID_Proveedor")), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        moneda: col(r,map,"Moneda")||"MXN",
+        formaPago: col(r,map,"Forma de Pago"), tiempoEntrega: col(r,map,"Tiempo de Entrega"),
+        condicionEntrega: col(r,map,"Condición de Entrega"),
+        ivaPct: (col(r,map,"% IVA")!=="") ? N(col(r,map,"% IVA")) : 16,
         notas:col(r,map,"Notas"), items:[]
       });
     });
@@ -3045,7 +3079,8 @@ function importarWorkbook(wb){
       if(!po) return;
       po.items.push({
         descripcion:col(r,map,"Descripción"), numeroParte:col(r,map,"Número de Parte"),
-        cantidad:N(col(r,map,"Cantidad"))||1, costoUnitario:N(col(r,map,"Costo Unitario")),
+        cantidad:N(col(r,map,"Cantidad"))||1,
+        costoUnitarioMXN:N(col(r,map,"Costo Unitario MXN")), costoUnitarioUSD:N(col(r,map,"Costo Unitario USD")),
         entrega:col(r,map,"Entrega")
       });
     });
@@ -3191,17 +3226,19 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inyAoa), "Inyecciones");
 
   const poEncAoa = [
-    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Notas","Total"],
+    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Moneda","Forma de Pago","Tiempo de Entrega","Condición de Entrega","% IVA","Notas","Total"],
     ...state.pos.map(po=>{
       const prov = proveedorById(po.idProveedor);
-      return [po.folio, po.cr, po.idProveedor, prov?prov.nombreComercial:"", po.fecha, po.notas||"", totalPO(po)];
+      return [po.folio, po.cr, po.idProveedor, prov?prov.nombreComercial:"", po.fecha, po.moneda||"MXN",
+        po.formaPago||"", po.tiempoEntrega||"", po.condicionEntrega||"", (po.ivaPct!==undefined&&po.ivaPct!==null&&po.ivaPct!=="")?N(po.ivaPct):16,
+        po.notas||"", totalPO(po)];
     })
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poEncAoa), "POs_Encabezado");
 
   const poDetAoa = [
-    ["PO (folio)","No. Renglón","Descripción","Número de Parte","Cantidad","Costo Unitario","Entrega"],
-    ...state.pos.flatMap(po=>(po.items||[]).map((it,idx)=>[po.folio, idx+1, it.descripcion, it.numeroParte||"", it.cantidad, it.costoUnitario, it.entrega||""]))
+    ["PO (folio)","No. Renglón","Descripción","Número de Parte","Cantidad","Costo Unitario MXN","Costo Unitario USD","Entrega"],
+    ...state.pos.flatMap(po=>(po.items||[]).map((it,idx)=>[po.folio, idx+1, it.descripcion, it.numeroParte||"", it.cantidad, N(it.costoUnitarioMXN), N(it.costoUnitarioUSD), it.entrega||""]))
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poDetAoa), "POs_Detalle");
 
