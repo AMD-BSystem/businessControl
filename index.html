@@ -240,6 +240,7 @@
         <input type="text" id="searchCR" placeholder="Buscar por folio, cliente, descripción o número de parte...">
         <select id="filterCliente"><option value="">Todos los clientes</option></select>
         <select id="filterStatus"><option value="">Todos los status</option></select>
+        <button class="btn btn-outline" id="btnExportarSolicitudes">Exportar a Excel</button>
       </div>
       <div class="card" style="padding:0;">
         <div id="solicitudesTableWrap"></div>
@@ -1287,7 +1288,7 @@ function renderSolicitudes(){
     empresasUnicas().map(e=>`<option value="${e}" ${e===seleccionActual?"selected":""}>${e}</option>`).join("");
   applySolicitudesFilter();
 }
-function applySolicitudesFilter(){
+function foliosFiltradosActuales(){
   const q = (document.getElementById("searchCR").value||"").toLowerCase();
   const st = document.getElementById("filterStatus").value;
   const emp = document.getElementById("filterCliente").value;
@@ -1298,12 +1299,35 @@ function applySolicitudesFilter(){
     return (!q || haystack.includes(q)) && (!st || f.status===st) && (!emp || (cli && cli.empresa===emp));
   });
   list.sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||""));
+  return list;
+}
+function applySolicitudesFilter(){
+  const list = foliosFiltradosActuales();
   document.getElementById("solicitudesTableWrap").innerHTML = tablaFolios(list);
   bindFolioRowClicks();
 }
 document.getElementById("searchCR").addEventListener("input", applySolicitudesFilter);
 document.getElementById("filterStatus").addEventListener("change", applySolicitudesFilter);
 document.getElementById("filterCliente").addEventListener("change", applySolicitudesFilter);
+function exportarSolicitudesFiltradas(){
+  const list = foliosFiltradosActuales();
+  if(list.length===0){ showToast("No hay solicitudes que coincidan con el filtro actual", true); return; }
+  const wb = XLSX.utils.book_new();
+  const encAoa = [ENC_HEADERS_CR, ...list.map(filaFolioExcel)];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(encAoa), "CR_Encabezado");
+  const crsIncluidos = new Set(list.map(f=>f.cr));
+  const detAoa = [DET_HEADERS_CR, ...state.detalles.filter(d=>crsIncluidos.has(d.cr)).map(filaDetalleExcel)];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detAoa), "CR_Detalle");
+  const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+  const blob = new Blob([wbout], {type:"application/octet-stream"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "CRs_filtradas_"+todayISO()+".xlsx";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast(list.length+" solicitud(es) exportada(s) a Excel");
+}
+document.getElementById("btnExportarSolicitudes").addEventListener("click", exportarSolicitudesFiltradas);
 
 /* =========================================================================
    CLIENTES
@@ -3153,6 +3177,35 @@ document.getElementById("btnSave").addEventListener("click", async ()=>{
   await guardarExcelEnOneDrive(false);
 });
 
+const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
+  "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
+  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
+  "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
+  "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
+function filaFolioExcel(f){
+  ensureFechas(f);
+  const cli = clienteById(f.idCliente);
+  const fpp = fechaProbablePago(f);
+  return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
+    f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolioPlaneada(f.cr),
+    tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
+    f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
+    f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
+    f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
+    f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
+}
+const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
+  "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
+  "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
+  "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
+  "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
+function filaDetalleExcel(d){
+  return [d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
+    d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
+    d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
+    (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
+    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)];
+}
 function exportarWorkbook(){
   const wb = XLSX.utils.book_new();
 
@@ -3162,37 +3215,10 @@ function exportarWorkbook(){
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(clientesAoa), "Clientes");
 
-  const encHeaders = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
-    "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
-    "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
-    "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
-    "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
-  const encAoa = [encHeaders, ...state.folios.map(f=>{
-    ensureFechas(f);
-    const cli = clienteById(f.idCliente);
-    const fpp = fechaProbablePago(f);
-    return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
-      f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolioPlaneada(f.cr),
-      tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
-      f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
-      f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
-      f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
-      f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
-  })];
+  const encAoa = [ENC_HEADERS_CR, ...state.folios.map(filaFolioExcel)];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(encAoa), "CR_Encabezado");
 
-  const detHeaders = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
-    "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
-    "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
-    "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
-    "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
-  const detAoa = [detHeaders, ...state.detalles.map(d=>[
-    d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
-    d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
-    d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
-    (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
-    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)
-  ])];
+  const detAoa = [DET_HEADERS_CR, ...state.detalles.map(filaDetalleExcel)];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detAoa), "CR_Detalle");
 
   const accAoa = [
