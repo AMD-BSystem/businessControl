@@ -9,7 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@4.30.0/lib/msal-browser.min.js"></script>
 <style>
   :root{
     --navy-950:#041629; --navy-900:#0b2545; --navy-800:#0f172a; --navy-700:#123a63;
@@ -27,13 +27,18 @@
   ::selection{background:var(--blue-100);}
 
   #shell{display:grid; grid-template-columns:230px 1fr; grid-template-rows:56px 1fr; height:100vh; min-height:600px;}
+  #shell.sidebar-collapsed{grid-template-columns:0px 1fr;}
+  #shell.sidebar-collapsed #sidebar{display:none;}
 
-  #topbar{grid-column:1/3; grid-row:1; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#041629 0%,#0b2545 55%,#145da0 100%); color:var(--white); padding:0 20px; border-bottom:1px solid var(--navy-700);}
-  #topbar .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px;}
+  #topbar{grid-column:1/3; grid-row:1; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#041629 0%,#0b2545 55%,#145da0 100%); color:var(--white); padding:0 20px; border-bottom:1px solid var(--navy-700); gap:10px; min-width:0;}
+  #topbar .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px; flex-shrink:0;}
   #topbar .brand .dot{width:9px; height:9px; border-radius:50%; background:var(--blue-400);}
-  #topbar .file-status{font-size:12px; color:var(--gray-400); display:flex; align-items:center; gap:8px; font-family:var(--mono);}
+  #topbar .hamburger{background:transparent; border:1px solid rgba(255,255,255,.25); color:#fff; font-size:15px; line-height:1; padding:8px 11px; border-radius:7px; flex-shrink:0;}
+  #topbar .hamburger:hover{background:rgba(255,255,255,.08);}
+  #topbar .file-status{font-size:12px; color:var(--gray-400); display:flex; align-items:center; gap:8px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   #topbar .file-status.connected{color:#8fd6b0;}
-  #topbar .actions{display:flex; gap:8px; align-items:center;}
+  #topbar .actions{display:flex; gap:8px; align-items:center; flex-shrink:0; overflow-x:auto;}
+  #sidebarBackdrop{display:none; position:fixed; inset:0; background:rgba(4,22,41,.55); z-index:39;}
 
   #sidebar{grid-column:1; grid-row:2; background:var(--navy-900); color:var(--gray-400); padding:18px 12px; display:flex; flex-direction:column; gap:2px; overflow-y:auto;}
   .nav-item{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; color:var(--gray-400); font-size:13.5px; font-weight:500; text-decoration:none; border:none; background:none; text-align:left; width:100%;}
@@ -151,17 +156,45 @@
   .prio-media{background:#fff2cc; color:#7a5b00;}
   .prio-deseable{background:#e3e6eb; color:#4c5566;}
   .done-row{opacity:.5; text-decoration:line-through;}
+
+  [id$="TableWrap"]{overflow-x:auto;}
+
+  /* ===== Responsivo ===== */
+  @media (max-width: 860px){
+    #topbar .file-status{display:none;}
+    #shell{grid-template-columns:1fr;}
+    #shell.sidebar-collapsed{grid-template-columns:1fr;}
+    #sidebar{position:fixed; top:56px; left:0; bottom:0; width:230px; z-index:40; display:none; box-shadow:4px 0 24px rgba(0,0,0,.35);}
+    #shell:not(.sidebar-collapsed) #sidebar{display:flex;}
+    #shell:not(.sidebar-collapsed) #sidebarBackdrop{display:block;}
+    #main{padding:18px 14px;}
+  }
+  @media (max-width: 720px){
+    .grid-2,.grid-3,.grid-4{grid-template-columns:1fr;}
+    .modal{padding:18px; width:94vw;}
+    .cards-row{grid-template-columns:1fr 1fr;}
+    #topbar{padding:0 12px;}
+    #topbar .brand span:not(.dot){font-size:13px;}
+    h1.page-title{font-size:17px;}
+  }
+  @media (max-width: 480px){
+    .cards-row{grid-template-columns:1fr;}
+  }
 </style>
 </head>
 <body>
 
 <div id="shell">
+  <div id="sidebarBackdrop"></div>
   <div id="topbar">
-    <div class="brand"><span class="dot"></span> Control de Cotizaciones</div>
-    <div class="file-status" id="fileStatus">Sin archivo cargado</div>
+    <button class="hamburger" id="btnToggleSidebar" title="Mostrar/ocultar menú">&#9776;</button>
+    <div class="brand"><span class="dot"></span> <span>Control de Cotizaciones</span></div>
+    <div class="file-status" id="fileStatus">Sin sesión de Microsoft</div>
     <div class="actions">
-      <input type="file" id="fileInput" accept=".xlsx" style="display:none">
-      <button class="btn btn-ghost" id="btnOpen">Abrir Excel</button>
+      <span class="mono small" id="msAccountChip" style="display:none; color:#8fd6b0;"></span>
+      <button class="btn btn-ghost" id="btnMsLogin">Iniciar sesión con Microsoft</button>
+      <button class="btn btn-ghost" id="btnRecargarExcel" style="display:none;">Buscar/recargar Excel</button>
+      <button class="btn btn-ghost" id="btnMsLogout" style="display:none;">Cerrar sesión</button>
       <button class="btn btn-primary" id="btnSave" disabled>Guardar cambios</button>
     </div>
   </div>
@@ -171,9 +204,10 @@
     <button class="nav-item active" data-view="dashboard"><span class="ic">&#9632;</span> Dashboard</button>
     <button class="nav-item" data-view="solicitudes"><span class="ic">&#9776;</span> Solicitudes (CR)</button>
     <button class="nav-item" data-view="clientes"><span class="ic">&#9737;</span> Clientes</button>
+    <button class="nav-item" data-view="proveedores"><span class="ic">&#128230;</span> Proveedores</button>
     <button class="nav-item" data-view="acciones"><span class="ic">&#10003;</span> Acciones pendientes</button>
     <button class="nav-item" data-view="gastos"><span class="ic">&#128176;</span> Gastos</button>
-    <button class="nav-item" data-view="utilidad"><span class="ic">&#128200;</span> Utilidad</button>
+    <button class="nav-item" data-view="balance"><span class="ic">&#128200;</span> Balance</button>
     <button class="nav-item" data-view="config"><span class="ic">&#9881;</span> Configuración</button>
     <div class="nav-sep"></div>
     <button class="nav-item" id="btnNuevaSolicitudNav"><span class="ic">+</span> Nueva solicitud</button>
@@ -204,7 +238,9 @@
       </div>
       <div class="search-row">
         <input type="text" id="searchCR" placeholder="Buscar por folio, cliente, descripción o número de parte...">
+        <select id="filterCliente"><option value="">Todos los clientes</option></select>
         <select id="filterStatus"><option value="">Todos los status</option></select>
+        <button class="btn btn-outline" id="btnExportarSolicitudes">Exportar a Excel</button>
       </div>
       <div class="card" style="padding:0;">
         <div id="solicitudesTableWrap"></div>
@@ -224,6 +260,19 @@
       </div>
     </div>
 
+    <div class="view" id="view-proveedores">
+      <div class="flex-between">
+        <div>
+          <h1 class="page-title">Proveedores</h1>
+          <p class="page-sub">Catálogo de proveedores: quién nos vende qué, y bajo qué marca.</p>
+        </div>
+        <button class="btn btn-primary" id="btnNuevoProveedor">+ Nuevo proveedor</button>
+      </div>
+      <div class="card" style="padding:0;">
+        <div id="proveedoresTableWrap"></div>
+      </div>
+    </div>
+
     <div class="view" id="view-acciones">
       <div class="flex-between">
         <div>
@@ -234,6 +283,7 @@
       </div>
       <div class="search-row">
         <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" id="chkMostrarCompletadas"> Mostrar completadas</label>
+        <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" id="chkMostrarEliminadas"> Mostrar eliminadas</label>
       </div>
       <div class="card" style="padding:0;">
         <div id="accionesTableWrap"></div>
@@ -254,22 +304,40 @@
       </div>
     </div>
 
-    <div class="view" id="view-utilidad">
-      <h1 class="page-title">Utilidad real vs. planeada</h1>
-      <p class="page-sub">Incluye todas las CRs (menos las canceladas). "Planeada" es la utilidad proyectada con los costos y % de ganancia capturados hasta hoy en cada folio. "Real" solo cuenta una vez que el folio llega a "Finalizada" — mientras tanto se muestra como pendiente.</p>
-      <div id="utilidadContent"></div>
+    <div class="view" id="view-balance">
+      <div class="flex-between">
+        <div>
+          <h1 class="page-title">Balance</h1>
+          <p class="page-sub">Ingresos (CRs pagadas), inyecciones de capital y gastos del negocio.</p>
+        </div>
+        <button class="btn btn-primary" id="btnNuevaInyeccion">+ Agregar inyección</button>
+      </div>
+      <div class="cards-row" id="balanceStatCards"></div>
+      <div class="card">
+        <h3>Balance por mes</h3>
+        <div id="balanceMesWrap"></div>
+      </div>
+      <div class="card" style="padding:0;">
+        <div class="flex-between" style="padding:20px 20px 0;">
+          <h3 style="margin:0;">Movimientos</h3>
+        </div>
+        <div id="balanceMovimientosWrap"></div>
+      </div>
     </div>
 
     <div class="view" id="view-config">
       <h1 class="page-title">Configuración</h1>
       <p class="page-sub">Datos que se usan al generar la propuesta en PDF. Se guardan dentro del mismo Excel.</p>
       <div class="card">
-        <h3>Carpeta donde guardar los PDF de propuestas</h3>
-        <p class="small muted" style="margin:0 0 10px;">Disponible en Chrome/Edge abriendo el archivo directo en el navegador (no dentro de la vista previa de Claude). Se elige una vez por sesión.</p>
-        <div class="flex-between">
-          <span class="mono small" id="pdfFolderLabel">Sin carpeta elegida (se descargará normal)</span>
-          <button class="btn btn-outline btn-sm" id="btnElegirCarpetaPdf">Elegir carpeta</button>
-        </div>
+        <h3>Sesión de Microsoft (OneDrive)</h3>
+        <p class="small muted" style="margin:0 0 10px;">La app se conecta a tu Excel guardado en OneDrive usando tu cuenta de Microsoft autorizada. La sesión se recuerda sola en este dispositivo/navegador — no hace falta iniciar sesión cada vez que abres la app.</p>
+        <div class="kv"><span class="k">Cuenta conectada</span><span class="v mono" id="cfgMsAccountLabel">Ninguna</span></div>
+        <div class="kv"><span class="k">Archivo conectado</span><span class="v mono" id="cfgMsFileLabel">Ninguno</span></div>
+        <div class="kv"><span class="k">Carpeta de PDFs conectada</span><span class="v mono" id="cfgPdfFolderLabel">Ninguna</span></div>
+      </div>
+      <div class="card">
+        <h3>Carpeta donde se guardan los PDF de propuestas</h3>
+        <p class="small muted" style="margin:0;">Los PDF de propuestas se guardan automáticamente en la carpeta "2_Cotizaciones" de OneDrive, usando la misma sesión de Microsoft — no requiere elegir nada, ni volver a conectar cada vez que abres la app.</p>
       </div>
       <div class="card">
         <h3>Datos de contacto de tu empresa (van en el pie de la propuesta)</h3>
@@ -313,6 +381,14 @@
   </div>
 </div>
 
+<div class="modal-bg" id="modalProveedor">
+  <div class="modal">
+    <h2 id="proveedorModalTitle">Nuevo proveedor</h2>
+    <p class="sub">Catálogo de proveedores para tener a la mano quién nos vende qué.</p>
+    <div id="formProveedor"></div>
+  </div>
+</div>
+
 <div class="modal-bg" id="modalCancelar">
   <div class="modal" style="width:460px;">
     <h2>Cancelar solicitud</h2>
@@ -333,9 +409,17 @@
   </div>
 </div>
 
+<div class="modal-bg" id="modalEditarItem">
+  <div class="modal">
+    <h2>Editar datos iniciales del renglón</h2>
+    <p class="sub">Corrige descripción, número de parte, tiempo de entrega, link o notas. Los costos se editan directo en la CR.</p>
+    <div id="formEditarItem"></div>
+  </div>
+</div>
+
 <div class="modal-bg" id="modalGasto">
   <div class="modal" style="width:480px;">
-    <h2>Nuevo gasto</h2>
+    <h2 id="gastoModalTitle">Nuevo gasto</h2>
     <p class="sub">El IVA se calcula solo a partir del total (desglosado), a menos que lo desactives.</p>
     <div id="formGasto"></div>
   </div>
@@ -349,7 +433,30 @@
   </div>
 </div>
 
+<div class="modal-bg" id="modalInyeccion">
+  <div class="modal" style="width:460px;">
+    <h2 id="inyeccionModalTitle">Nueva inyección de capital</h2>
+    <p class="sub">Dinero que entra al negocio y no viene de una CR pagada (ej. aportación de socio).</p>
+    <div id="formInyeccion"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalPO">
+  <div class="modal">
+    <h2>Generar Orden de Compra (PO)</h2>
+    <p class="sub">Elige el proveedor y los renglones que cubre esta compra. Se genera un PDF y se guarda en OneDrive.</p>
+    <div id="formPO"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
+
+<div id="errorBanner" style="display:none; position:fixed; top:66px; left:50%; transform:translateX(-50%); max-width:600px; width:92vw; background:#b3432e; color:#fff; padding:16px 20px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:200; white-space:pre-wrap; font-size:13px; line-height:1.5;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+    <div id="errorBannerText" style="flex:1;"></div>
+    <button id="errorBannerClose" style="background:transparent; border:1px solid rgba(255,255,255,.5); color:#fff; border-radius:6px; padding:2px 9px; cursor:pointer; flex-shrink:0;">&times;</button>
+  </div>
+</div>
 
 <script>
 /* =========================================================================
@@ -360,7 +467,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Cotización {{NumeroCotizacion}} | AMD Business Services</title>
+  <title>{{TituloDocumento}} {{NumeroCotizacion}} | AMD Business Services</title>
   <style>
     @page { size: Letter; margin: 0.28in; }
     * { box-sizing: border-box; }
@@ -379,9 +486,9 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
 " alt="AMD Business Services" style="display:block; max-width:260px; max-height:90px; margin-bottom:8px;" />
           </td>
           <td align="right" style="width:42%; vertical-align:top;">
-            <div style="font-size:25px; font-weight:800; letter-spacing:.4px;">COTIZACIÓN</div>
+            <div style="font-size:25px; font-weight:800; letter-spacing:.4px;">{{TituloDocumento}}</div>
             <div style="margin-top:7px; display:inline-block; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.25); border-radius:10px; padding:9px 12px; text-align:left;">
-              <div style="font-size:11px; opacity:.85;">No. Cotización</div>
+              <div style="font-size:11px; opacity:.85;">{{EtiquetaFolio}}</div>
               <div style="font-size:18px; font-weight:700;">{{NumeroCotizacion}}</div>
             </div>
           </td>
@@ -393,7 +500,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
       <table width="100%" cellspacing="0" cellpadding="0" border="0">
         <tr>
           <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Fecha</div><div style="font-size:14px; font-weight:700;">{{Fecha}}</div></div></td>
-          <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Vigencia</div><div style="font-size:14px; font-weight:700;">{{Vigencia}}</div></div></td>
+          <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">{{EtiquetaVigencia}}</div><div style="font-size:14px; font-weight:700;">{{Vigencia}}</div></div></td>
           <td style="width:33.33%; padding:4px;"><div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:9px 11px;"><div style="font-size:10px; color:#64748b; text-transform:uppercase; font-weight:700;">Moneda</div><div style="font-size:14px; font-weight:700;">{{Moneda}}</div></div></td>
         </tr>
       </table>
@@ -404,8 +511,8 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
         <tr>
           <td style="width:50%; vertical-align:top; padding:4px;">
             <div class="no-break" style="border:1px solid #dbe3ef; border-radius:11px; overflow:hidden;">
-              <div style="background:#0b2545; color:#fff; padding:8px 12px; font-size:12px; font-weight:800;">DATOS DEL CLIENTE</div>
-              <div style="padding:10px 12px; line-height:1.45; font-size:12px;"><strong>Empresa:</strong> {{Empresa}}<br /><strong>Contacto:</strong> {{Contacto}}<br /><strong>Correo:</strong> {{Correo}}<br /><strong>Entrega en:</strong> {{EntregaEn}}</div>
+              <div style="background:#0b2545; color:#fff; padding:8px 12px; font-size:12px; font-weight:800;">{{TituloDestinatario}}</div>
+              <div style="padding:10px 12px; line-height:1.45; font-size:12px;"><strong>Empresa:</strong> {{Empresa}}<br /><strong>Contacto:</strong> {{Contacto}}<br /><strong>Correo:</strong> {{Correo}}<br /><strong>{{EtiquetaDireccion}}:</strong> {{EntregaEn}}</div>
             </div>
           </td>
           <td style="width:50%; vertical-align:top; padding:4px;">
@@ -492,30 +599,430 @@ let state = {
   detalles: [],
   acciones: [],
   gastos: [],
+  proveedores: [],
+  ingresos: [],
+  inyecciones: [],
+  pos: [],
   config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
 };
-let fileHandle = null;
 let loadedFileName = null;
 let currentCR = null;
-let pdfDirHandle = null;
-let chartUtilidadInstance = null;
 
-async function guardarPdfBlob(blob, filename){
-  if(pdfDirHandle){
-    try{
-      const fh = await pdfDirHandle.getFileHandle(filename, {create:true});
-      const writable = await fh.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      showToast("PDF guardado en la carpeta elegida: "+filename);
-      return;
-    }catch(err){ console.error(err); /* si falla, caemos a la descarga normal */ }
+/* =========================================================================
+   LOGIN CON MICROSOFT (MSAL) + EXCEL EN ONEDRIVE VÍA MICROSOFT GRAPH
+   El Excel real vive en el OneDrive de amd_laser_qro, compartido con
+   amd_servicio. Cualquiera de las dos cuentas puede leer/escribir el mismo
+   archivo. La sesión se recuerda sola (localStorage de MSAL) en cada
+   dispositivo — no hace falta iniciar sesión cada vez que se abre la app.
+   ========================================================================= */
+const MSAL_CLIENT_ID = "be752399-69eb-429c-a3bb-a9cf21e1365c";
+const MSAL_AUTHORITY = "https://login.microsoftonline.com/consumers";
+const MSAL_SCOPES = ["User.Read", "Files.ReadWrite"];
+const CUENTAS_AUTORIZADAS = ["amd_laser_qro@outlook.com", "alex_juarezvega@outlook.com", "amd_servicio@outlook.com"];
+const EXCEL_FILENAME = "Control_Cotizaciones.xlsx";
+const EXCEL_SHARE_URL = "https://1drv.ms/x/c/5d74b477fff6ebb3/IQD-mBTZt7stTYA77TS6hPTeASS8i3sasTuRwP6k_hDz7xU?e=Bg5Th6";
+
+const msalInstance = new msal.PublicClientApplication({
+  auth: {
+    clientId: MSAL_CLIENT_ID,
+    authority: MSAL_AUTHORITY,
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
+});
+const msalListo = msalInstance.initialize(); // se dispara una sola vez; todo lo demás lo espera
+
+let cuentaActiva = null;
+let excelFileRef = null; // {driveId, itemId, lastModifiedDateTime}
+
+function cuentaAutorizada(username){
+  return CUENTAS_AUTORIZADAS.includes((username||"").toLowerCase());
+}
+function actualizarUILogin(){
+  const chip = document.getElementById("msAccountChip");
+  const btnLogin = document.getElementById("btnMsLogin");
+  const btnLogout = document.getElementById("btnMsLogout");
+  const btnRecargar = document.getElementById("btnRecargarExcel");
+  if(cuentaActiva){
+    chip.textContent = cuentaActiva.username;
+    chip.style.display = "inline-flex";
+    btnLogin.style.display = "none";
+    btnLogout.style.display = "inline-flex";
+    btnRecargar.style.display = "inline-flex";
+  } else {
+    chip.style.display = "none";
+    btnLogin.style.display = "inline-flex";
+    btnLogout.style.display = "none";
+    btnRecargar.style.display = "none";
   }
+}
+document.getElementById("btnRecargarExcel").addEventListener("click", cargarExcelDesdeOneDrive);
+async function iniciarSesionMicrosoft(){
+  try{
+    await msalListo;
+    await msalInstance.loginRedirect({ scopes: MSAL_SCOPES });
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo iniciar sesión con Microsoft", true);
+  }
+}
+async function cerrarSesionMicrosoft(){
+  const account = cuentaActiva;
+  cuentaActiva = null; excelFileRef = null;
+  document.getElementById("fileStatus").textContent = "Sin sesión de Microsoft";
+  document.getElementById("fileStatus").classList.remove("connected");
+  document.getElementById("btnSave").disabled = true;
+  document.getElementById("btnSave").textContent = "Guardar cambios";
+  actualizarUILogin();
+  try{ await msalListo; await msalInstance.logoutRedirect({ account }); }catch(err){ /* ignorar */ }
+}
+async function obtenerTokenGraph(){
+  if(!cuentaActiva) return null;
+  try{
+    await msalListo;
+    const res = await msalInstance.acquireTokenSilent({ scopes: MSAL_SCOPES, account: cuentaActiva });
+    return res.accessToken;
+  }catch(err){
+    try{ await msalInstance.acquireTokenRedirect({ scopes: MSAL_SCOPES, account: cuentaActiva }); }
+    catch(err2){ console.error(err2); }
+    return null;
+  }
+}
+async function graphFetch(path, options){
+  const token = await obtenerTokenGraph();
+  if(!token) throw new Error("Sin token de Microsoft Graph");
+  const res = await fetch("https://graph.microsoft.com/v1.0"+path, {
+    ...(options||{}),
+    headers: { ...((options&&options.headers)||{}), "Authorization": "Bearer "+token }
+  });
+  if(!res.ok){
+    const txt = await res.text().catch(()=>"");
+    throw new Error("Graph "+res.status+": "+txt);
+  }
+  return res;
+}
+function nombreCoincide(nombre){
+  return (nombre||"").toLowerCase()===EXCEL_FILENAME.toLowerCase();
+}
+async function listarHijosCompleto(path){
+  // Sigue @odata.nextLink para no perder archivos cuando una carpeta tiene
+  // más elementos de los que caben en una sola página de respuesta.
+  let items = [];
+  let url = "https://graph.microsoft.com/v1.0"+path+(path.includes("?")?"&":"?")+"$top=200";
+  while(url){
+    const token = await obtenerTokenGraph();
+    const res = await fetch(url, { headers: { "Authorization":"Bearer "+token } });
+    if(!res.ok){ const txt = await res.text().catch(()=>""); throw new Error("Graph "+res.status+": "+txt); }
+    const data = await res.json();
+    items = items.concat(data.value||[]);
+    url = data["@odata.nextLink"] || null;
+  }
+  return items;
+}
+async function buscarEnDriveRecursivo(driveId, itemIdOrRoot, profundidad, presupuesto){
+  if(profundidad>6) return null; // evita recursión infinita en carpetas muy anidadas
+  if(presupuesto.usadas>=presupuesto.max) return null; // evita que se "cuelgue" en OneDrives con miles de archivos
+  presupuesto.usadas++;
+  const base = itemIdOrRoot==="root" ? `/drives/${driveId}/root/children` : `/drives/${driveId}/items/${itemIdOrRoot}/children`;
+  const items = await listarHijosCompleto(base);
+  const directo = items.find(c=>c.file && nombreCoincide(c.name));
+  if(directo) return { driveId, itemId: directo.id };
+  for(const child of items){
+    if(child.folder){
+      const found = await buscarEnDriveRecursivo(driveId, child.id, profundidad+1, presupuesto);
+      if(found) return found;
+    }
+  }
+  return null;
+}
+// Rutas típicas donde puede vivir el archivo — se intentan primero porque son
+// una sola llamada directa (mucho más rápido que recorrer todo el OneDrive).
+const RUTAS_DIRECTAS_CANDIDATAS = [
+  "Documentos/8_Emprendimientos/AMD Business Services/3_AMD BSystem/"+EXCEL_FILENAME,
+  "Documents/8_Emprendimientos/AMD Business Services/3_AMD BSystem/"+EXCEL_FILENAME
+];
+async function buscarPorRutaDirecta(){
+  for(const ruta of RUTAS_DIRECTAS_CANDIDATAS){
+    try{
+      const res = await graphFetch(`/me/drive/root:/${ruta.split("/").map(encodeURIComponent).join("/")}`);
+      const item = await res.json();
+      if(item && item.file) return { driveId: item.parentReference.driveId, itemId: item.id };
+    }catch(err){ /* esa ruta no existe para esta cuenta, se prueba la siguiente */ }
+  }
+  return null;
+}
+function codificarShareToken(url){
+  // https://learn.microsoft.com/graph/api/shares-get
+  const base64 = btoa(url).replace(/=/g,"").replace(/\//g,"_").replace(/\+/g,"-");
+  return "u!"+base64;
+}
+async function buscarPorLinkCompartido(){
+  if(!EXCEL_SHARE_URL) return null;
+  const token = codificarShareToken(EXCEL_SHARE_URL);
+  const res = await graphFetch(`/shares/${token}/driveItem`);
+  const item = await res.json();
+  if(item && item.file) return { driveId: item.parentReference.driveId, itemId: item.id };
+  return null;
+}
+async function buscarArchivoExcel(){
+  const errores = [];
+
+  // 0) Link de compartición conocido — funciona igual para el dueño y para quien
+  //    tiene acceso compartido, sin depender del listado "compartido conmigo".
+  try{
+    const viaLink = await buscarPorLinkCompartido();
+    if(viaLink) return { ref: viaLink };
+  }catch(err){ errores.push("Link compartido: "+err.message); }
+
+  // 1) Ruta directa conocida (una sola llamada, la más rápida — se intenta siempre primero)
+  try{
+    const directo = await buscarPorRutaDirecta();
+    if(directo) return { ref: directo };
+  }catch(err){ errores.push("Ruta directa: "+err.message); }
+
+  let miDriveId = null;
+  try{
+    const dRes = await graphFetch(`/me/drive`);
+    miDriveId = (await dRes.json()).id;
+  }catch(err){ errores.push("Leer tu OneDrive: "+err.message); }
+
+  if(miDriveId){
+    // 2) Búsqueda rápida (índice de OneDrive; puede tardar en detectar archivos recién subidos)
+    try{
+      showToast("Buscando en el índice de OneDrive...");
+      const res = await graphFetch(`/me/drive/root/search(q='${encodeURIComponent(EXCEL_FILENAME)}')`);
+      const data = await res.json();
+      const match = (data.value||[]).find(it=>it.file && nombreCoincide(it.name));
+      if(match) return { ref: { driveId: match.parentReference.driveId, itemId: match.id } };
+    }catch(err){ errores.push("Búsqueda rápida en tu OneDrive: "+err.message); }
+    // 3) Recorrido de carpetas de tu propio OneDrive, con límite de llamadas para no tardar demasiado
+    try{
+      showToast("Recorriendo carpetas de tu OneDrive (puede tardar un momento)...");
+      const found = await buscarEnDriveRecursivo(miDriveId, "root", 0, {usadas:0, max:60});
+      if(found) return { ref: found };
+    }catch(err){ errores.push("Recorrido de carpetas en tu OneDrive: "+err.message); }
+  }
+  // 4) Buscar en "Compartido conmigo" (archivo directo, o dentro de una carpeta compartida)
+  try{
+    showToast("Buscando en lo compartido contigo...");
+    let res;
+    try{
+      res = await graphFetch(`/me/drive/sharedWithMe?allowExternalGetOfBoundedResults=true`);
+    }catch(err1){
+      res = await graphFetch(`/me/drive/sharedWithMe`); // por si el parámetro especial no aplica en esta cuenta
+    }
+    const data = await res.json();
+    for(const it of (data.value||[])){
+      const remote = it.remoteItem;
+      if(!remote) continue;
+      if(remote.file && nombreCoincide(remote.name)) return { ref: { driveId: remote.parentReference.driveId, itemId: remote.id } };
+      if(remote.folder){
+        const found = await buscarEnDriveRecursivo(remote.parentReference.driveId, remote.id, 0, {usadas:0, max:60});
+        if(found) return { ref: found };
+      }
+    }
+  }catch(err){ errores.push("Compartido conmigo: "+err.message); }
+  return { ref: null, errores };
+}
+async function cargarExcelDesdeOneDrive(){
+  try{
+    showToast("Buscando "+EXCEL_FILENAME+" en OneDrive...");
+    const { ref, errores } = await buscarArchivoExcel();
+    if(!ref){
+      mostrarErrorPersistente("No se encontró \""+EXCEL_FILENAME+"\" ni en tu OneDrive ni en lo compartido contigo.\n\n"+
+        "Verifica: 1) que el archivo se llame exactamente así, 2) que esté compartido con esta cuenta ("+cuentaActiva.username+") con permiso de edición."+
+        (errores&&errores.length ? "\n\nDetalle técnico:\n"+errores.join("\n") : ""));
+      return;
+    }
+    excelFileRef = ref;
+    const metaRes = await graphFetch(`/drives/${ref.driveId}/items/${ref.itemId}`);
+    const meta = await metaRes.json();
+    excelFileRef.lastModifiedDateTime = meta.lastModifiedDateTime;
+    const contentRes = await graphFetch(`/drives/${ref.driveId}/items/${ref.itemId}/content`);
+    const buf = await contentRes.arrayBuffer();
+    const wb = XLSX.read(buf, {type:"array", cellDates:false});
+    importarWorkbook(wb);
+    loadedFileName = EXCEL_FILENAME;
+    document.getElementById("fileStatus").textContent = "Conectado: "+cuentaActiva.username;
+    document.getElementById("fileStatus").classList.add("connected");
+    document.getElementById("btnSave").disabled = true;
+    document.getElementById("btnSave").textContent = "Guardado ✓";
+    isDirty = false;
+    currentCR = null;
+    render();
+    goto("dashboard");
+    showToast("Excel cargado desde OneDrive: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
+    resolverCarpetaPdf().then(()=>renderConfig()); // se adelanta, sin bloquear la carga del Excel
+  }catch(err){
+    console.error(err);
+    mostrarErrorPersistente("No se pudo cargar el Excel desde OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err));
+  }
+}
+let guardadoEnCurso = false;
+async function guardarExcelEnOneDrive(esAuto){
+  if(!excelFileRef){ if(!esAuto) showToast("No hay un archivo de OneDrive conectado", true); return; }
+  if(guardadoEnCurso){
+    // ya hay un guardado en camino; cuando termine, markDirty ya reprogramó otro intento si hacía falta
+    return;
+  }
+  clearTimeout(autoSaveTimer);
+  guardadoEnCurso = true;
+  const btn = document.getElementById("btnSave");
+  try{
+    try{
+      const metaRes = await graphFetch(`/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}`);
+      const meta = await metaRes.json();
+      if(excelFileRef.lastModifiedDateTime && meta.lastModifiedDateTime !== excelFileRef.lastModifiedDateTime){
+        if(esAuto){
+          mostrarErrorPersistente(
+            "Hay una versión más reciente del Excel en OneDrive (probablemente guardada desde el otro dispositivo).\n\n"+
+            "Tus cambios en pantalla NO se guardaron automáticamente, para no sobrescribir esa versión.\n\n"+
+            "Da clic en \"Buscar/recargar Excel\" para traer la versión más reciente (perderás tus cambios locales de esta pantalla), "+
+            "o en \"Guardar cambios\" si prefieres sobrescribirla con lo que tienes aquí."
+          );
+          btn.textContent = "Guardar cambios";
+          return;
+        }
+        const continuar = confirm(
+          "El archivo Excel cambió en OneDrive desde que lo cargaste (probablemente se guardó desde el otro dispositivo).\n\n"+
+          "Si guardas ahora, tus cambios en pantalla sobrescribirán esa versión más reciente.\n\n"+
+          "¿Deseas continuar y sobrescribir de todas formas? Cancela para recargar primero."
+        );
+        if(!continuar){ btn.textContent = "Guardar cambios"; return; }
+      }
+    }catch(err){ /* si no se puede verificar, seguimos con el guardado normal */ }
+
+    const wb = exportarWorkbook();
+    const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+    const blob = new Blob([wbout], {type:"application/octet-stream"});
+    const token = await obtenerTokenGraph();
+    const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}/content`, {
+      method: "PUT",
+      headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+      body: blob
+    });
+    if(!res.ok) throw new Error("Graph PUT "+res.status);
+    const updated = await res.json();
+    excelFileRef.lastModifiedDateTime = updated.lastModifiedDateTime;
+    isDirty = false;
+    btn.disabled = true;
+    btn.textContent = "Guardado ✓";
+    showToast(esAuto ? "Guardado automáticamente en OneDrive" : "Guardado en OneDrive ("+cuentaActiva.username+")");
+  }catch(err){
+    console.error(err);
+    btn.textContent = "Guardar cambios";
+    if(!esAuto) showToast("Ocurrió un error al guardar en OneDrive", true);
+    else mostrarErrorPersistente("No se pudo guardar automáticamente en OneDrive.\n\nDetalle técnico: "+(err&&err.message?err.message:err)+"\n\nTus cambios siguen aquí en pantalla; da clic en \"Guardar cambios\" para reintentar.");
+  }finally{
+    guardadoEnCurso = false;
+  }
+}
+async function iniciarMsal(){
+  try{
+    await msalListo;
+    const resp = await msalInstance.handleRedirectPromise();
+    let account = (resp && resp.account) || msalInstance.getAllAccounts()[0] || null;
+    if(account && !cuentaAutorizada(account.username)){
+      mostrarErrorPersistente("Esta cuenta no está autorizada para usar esta app.\n\nCorreo detectado por Microsoft: "+account.username+"\n\nSi esperabas que esta cuenta funcionara, avisa este correo exacto para agregarlo a la lista de autorizados.\n\nPuedes cerrar este aviso e iniciar sesión con otra cuenta.");
+      actualizarUILogin(); // cuentaActiva sigue null: se muestra el botón normal de inicio de sesión
+      return;
+    }
+    if(account){
+      cuentaActiva = account;
+      msalInstance.setActiveAccount(account);
+      actualizarUILogin();
+      await cargarExcelDesdeOneDrive();
+    } else {
+      actualizarUILogin();
+    }
+  }catch(err){
+    console.error(err);
+    showToast("Error iniciando sesión con Microsoft", true);
+  }
+}
+document.getElementById("btnMsLogin").addEventListener("click", iniciarSesionMicrosoft);
+document.getElementById("btnMsLogout").addEventListener("click", cerrarSesionMicrosoft);
+
+const PDF_FOLDER_SHARE_URL = "https://1drv.ms/f/c/5d74b477fff6ebb3/IgB3bF79JCVmSL3FVQuO8oyMATi43grB816IhLg4XyvAN0k?e=PyfLR0";
+let pdfFolderRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
+async function resolverCarpetaPdf(){
+  if(pdfFolderRef) return pdfFolderRef;
+  if(!PDF_FOLDER_SHARE_URL) return null;
+  try{
+    const token = codificarShareToken(PDF_FOLDER_SHARE_URL);
+    const res = await graphFetch(`/shares/${token}/driveItem`);
+    const item = await res.json();
+    if(item && item.folder){
+      pdfFolderRef = { driveId: item.parentReference.driveId, itemId: item.id };
+      document.getElementById("cfgPdfFolderLabel").textContent = "2_Cotizaciones (OneDrive)";
+      return pdfFolderRef;
+    }
+  }catch(err){ console.warn("No se pudo resolver la carpeta de PDFs en OneDrive", err); }
+  return null;
+}
+async function guardarPdfBlob(blob, filename){
+  try{
+    const ref = await resolverCarpetaPdf();
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("PDF guardado en OneDrive (2_Cotizaciones): "+filename);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  // Respaldo: si no hay sesión de Microsoft o algo falló, se descarga normal
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó el PDF normal.", true);
+}
+
+const PO_FOLDER_SHARE_URL = "https://1drv.ms/f/c/5d74b477fff6ebb3/IgBK-HEuEVxoSbhfmWK_vBceAa9_YaV6xOTmLhYT8To0hm8?e=UzZX3w";
+let poFolderRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
+async function resolverCarpetaPOs(){
+  if(poFolderRef) return poFolderRef;
+  if(!PO_FOLDER_SHARE_URL) return null;
+  try{
+    const token = codificarShareToken(PO_FOLDER_SHARE_URL);
+    const res = await graphFetch(`/shares/${token}/driveItem`);
+    const item = await res.json();
+    if(item && item.folder){
+      poFolderRef = { driveId: item.parentReference.driveId, itemId: item.id };
+      return poFolderRef;
+    }
+  }catch(err){ console.warn("No se pudo resolver la carpeta de POs en OneDrive", err); }
+  return null;
+}
+async function guardarPOBlob(blob, filename){
+  try{
+    const ref = await resolverCarpetaPOs();
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("PO guardada en OneDrive (7_AMD POs): "+filename);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó el PDF de la PO normal.", true);
 }
 
 /* =========================================================================
@@ -537,6 +1044,20 @@ function nextFolio(){
   return prefix+String(count+1).padStart(3,"0");
 }
 function qtFolio(cr){ return cr.replace("CR-","QT-"); }
+function nextPOFolio(){
+  const d = new Date();
+  const yy = String(d.getFullYear()).slice(-2);
+  const mm = String(d.getMonth()+1).padStart(2,"0");
+  const prefix = "PO-"+yy+mm;
+  const count = state.pos.filter(p=>p.folio.startsWith(prefix)).length;
+  return prefix+String(count+1).padStart(3,"0");
+}
+function posDeCR(cr){ return state.pos.filter(p=>p.cr===cr); }
+function costoUnitarioPO(it, moneda){ return moneda==="USD" ? N(it.costoUnitarioUSD) : N(it.costoUnitarioMXN); }
+function totalPO(po){
+  const moneda = po.moneda||"MXN";
+  return round2((po.items||[]).reduce((s,it)=>s+costoUnitarioPO(it,moneda)*N(it.cantidad),0));
+}
 
 function normalizeLetters(s){ return (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Za-z]/g,""); }
 function letras3(empresa){ const l = normalizeLetters(empresa).toUpperCase(); return (l.slice(0,3) || "XXX").padEnd(3,"X"); }
@@ -546,24 +1067,44 @@ function nextClienteId(empresa){
   return pref+String(count+1).padStart(2,"0");
 }
 
+function nextProveedorId(nombreComercial){
+  const pref = "PR-"+letras3(nombreComercial);
+  const count = state.proveedores.filter(p=>p.id.toUpperCase().startsWith(pref)).length;
+  return pref+String(count+1).padStart(2,"0");
+}
+function proveedorById(id){ return state.proveedores.find(p=>p.id===id); }
 function clienteById(id){ return state.clientes.find(c=>c.id===id); }
 function detallesDe(cr){ return state.detalles.filter(d=>d.cr===cr); }
 function empresasUnicas(){ return [...new Set(state.clientes.map(c=>(c.empresa||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)); }
+function opcionesContactoPorEmpresa(empresa, idSeleccionado){
+  const matches = state.clientes.filter(c=>(c.empresa||"").trim()===empresa);
+  if(!empresa || matches.length===0) return `<option value="">Selecciona una empresa primero</option>`;
+  return `<option value="">Selecciona...</option>` + matches.map(c=>`<option value="${c.id}" ${c.id===idSeleccionado?"selected":""}>${c.contacto||c.id}</option>`).join("");
+}
 
 /* ---- costos: el costo de artículo se captura POR PIEZA; el resto de costos son por LOTE ---- */
-function costoArticuloTotal(d){ return N(d.costoArticulo) * N(d.cantidad||1); }
+function round2(v){ return Math.round((N(v) + Number.EPSILON) * 100) / 100; }
+function costoArticuloTotal(d){ return round2(N(d.costoArticulo) * N(d.cantidad||1)); }
 function ivaEsAuto(d){ return d.ivaAuto !== false; }
-function ivaValue(d){ return ivaEsAuto(d) ? costoArticuloTotal(d)*0.16 : N(d.iva); }
-function costoConIva(d){ return costoArticuloTotal(d) + ivaValue(d); }
-function otrosTotal(d){ return (d.otros||[]).reduce((s,o)=>s+N(o.monto),0); }
-function costoTotalRenglon(d){ return costoConIva(d) + N(d.recoleccion) + N(d.entrega) + N(d.empaque) + N(d.manoObra) + otrosTotal(d); }
-function precioFinalRenglon(d){ return costoTotalRenglon(d) * (1 + N(d.pctGanancia)/100); }
-function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return precioFinalRenglon(d)/cant; }
-function utilidadRenglon(d){ return precioFinalRenglon(d) - costoTotalRenglon(d); }
-function costoTotalFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0); }
-function utilidadFolio(cr){ return detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0); }
-function gastoSubtotal(g){ return g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal); }
-function gastoIva(g){ return g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0; }
+function ivaValue(d){ return round2(ivaEsAuto(d) ? costoArticuloTotal(d)*0.16 : N(d.iva)); }
+function costoConIva(d){ return round2(costoArticuloTotal(d) + ivaValue(d)); }
+function otrosTotal(d){ return round2((d.otros||[]).reduce((s,o)=>s+N(o.monto),0)); }
+function costoTotalRenglon(d){ return round2(costoConIva(d) + N(d.recoleccion) + N(d.entrega) + N(d.empaque) + N(d.manoObra) + otrosTotal(d)); }
+// El precio por pieza se redondea PRIMERO (a 2 decimales, como llega una OC real),
+// y el total del renglón sale de multiplicar ese precio ya redondeado por la cantidad.
+function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return round2((costoTotalRenglon(d) * (1 + N(d.pctGanancia)/100)) / cant); }
+function precioFinalRenglon(d){ const cant = N(d.cantidad)||1; return round2(precioUnitarioFinal(d) * cant); }
+function utilidadRenglon(d){ return round2(precioFinalRenglon(d) - costoTotalRenglon(d)); }
+function costoTotalFolio(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0)); }
+function gastosDeCR(cr){ return state.gastos.filter(g=>g.crAsignada===cr); }
+function gastosAsignadosTotal(cr){ return gastosDeCR(cr).reduce((s,g)=>s+N(g.costoTotal),0); }
+// Utilidad PLANEADA: la estimada al cotizar, con los costos capturados en cada renglón (no se mueve con los gastos reales).
+function utilidadFolioPlaneada(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+utilidadRenglon(d),0)); }
+// Utilidad REAL: precio al cliente menos únicamente los gastos reales que se le hayan asignado a esta CR.
+function tieneGastosRealesAsignados(cr){ return gastosDeCR(cr).length>0; }
+function utilidadFolioReal(cr){ return round2(costoTotalFolio(cr) - gastosAsignadosTotal(cr)); }
+function gastoSubtotal(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal)); }
+function gastoIva(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0); }
 function diasCreditoDe(folio){ const c = clienteById(folio.idCliente); return c ? N(c.diasCredito) : 0; }
 function tiempoEntregaTexto(d){ return d.tiempoEntregaValor ? (d.tiempoEntregaValor+" "+(d.tiempoEntregaUnidad||"días")) : "-"; }
 function tiempoEntregaGlobal(dets){
@@ -622,6 +1163,14 @@ function showToast(msg, isErr){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(()=>{ t.className="toast"; }, 3200);
 }
+function mostrarErrorPersistente(msg){
+  document.getElementById("errorBannerText").textContent = msg;
+  document.getElementById("errorBanner").style.display = "block";
+  console.error(msg);
+}
+document.getElementById("errorBannerClose").addEventListener("click", ()=>{
+  document.getElementById("errorBanner").style.display = "none";
+});
 
 /* =========================================================================
    NAVEGACIÓN
@@ -631,9 +1180,21 @@ function goto(view){
   document.getElementById("view-"+view).classList.add("active");
   document.querySelectorAll(".nav-item[data-view]").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
   render();
+  if(window.innerWidth<=860) document.getElementById("shell").classList.add("sidebar-collapsed"); // cierra el menú al navegar en celular
 }
 document.querySelectorAll(".nav-item[data-view]").forEach(b=>b.addEventListener("click", ()=>goto(b.dataset.view)));
 document.querySelectorAll("[data-goto]").forEach(b=>b.addEventListener("click", ()=>goto(b.dataset.goto)));
+
+/* =========================================================================
+   MENÚ LATERAL COLAPSABLE (y responsivo en celular)
+   ========================================================================= */
+if(window.innerWidth<=860) document.getElementById("shell").classList.add("sidebar-collapsed"); // cerrado por default en celular
+document.getElementById("btnToggleSidebar").addEventListener("click", ()=>{
+  document.getElementById("shell").classList.toggle("sidebar-collapsed");
+});
+document.getElementById("sidebarBackdrop").addEventListener("click", ()=>{
+  document.getElementById("shell").classList.add("sidebar-collapsed");
+});
 
 /* =========================================================================
    DASHBOARD
@@ -649,7 +1210,8 @@ function renderDashboard(){
     return STATUS_FLOW.findIndex(s=>s.key===f.status) >= idxPO;
   }).reduce((s,f)=>s+costoTotalFolio(f.cr),0);
   const finalizadas = state.folios.filter(f=>f.status==="Finalizada");
-  const utilidadFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolio(f.cr),0);
+  const utilidadPlaneadaFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolioPlaneada(f.cr),0);
+  const utilidadRealFinalizadas = finalizadas.reduce((s,f)=>s+utilidadFolioReal(f.cr),0);
   const canceladas = state.folios.filter(f=>f.status===CANCEL_KEY).length;
   const pendientesAbiertas = state.acciones.filter(a=>!a.completada).length;
 
@@ -658,7 +1220,8 @@ function renderDashboard(){
     <div class="stat-card"><div class="label">En proceso</div><div class="value blue">${activos}</div></div>
     <div class="stat-card"><div class="label">Valor en pipeline</div><div class="value blue">${money(pipelineValor)}</div></div>
     <div class="stat-card"><div class="label">Pipeline con OC recibida</div><div class="value" style="color:var(--navy-700)">${money(pipelineConfirmado)}</div></div>
-    <div class="stat-card"><div class="label">Utilidad (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadFinalizadas)}</div></div>
+    <div class="stat-card"><div class="label">Utilidad planeada (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadPlaneadaFinalizadas)}</div></div>
+    <div class="stat-card"><div class="label">Utilidad real (finalizadas)</div><div class="value" style="color:var(--ok)">${money(utilidadRealFinalizadas)}</div></div>
     <div class="stat-card"><div class="label">Finalizadas</div><div class="value">${finalizadas.length}</div></div>
     <div class="stat-card"><div class="label">Canceladas</div><div class="value" style="color:var(--danger)">${canceladas}</div></div>
     <div class="stat-card"><div class="label">Acciones pendientes</div><div class="value">${pendientesAbiertas}</div></div>
@@ -672,6 +1235,12 @@ function badgeHtml(status){
   const c = STATUS_COLORS[status] || {bg:"#eee", fg:"#333"};
   return `<span class="badge" style="background:${c.bg};color:${c.fg}">${status}</span>`;
 }
+function primeraDescripcionCR(cr){
+  const dets = detallesDe(cr);
+  if(!dets.length) return "";
+  const ordenado = [...dets].sort((a,b)=>a.noRenglon-b.noRenglon);
+  return ordenado[0].descripcion || "";
+}
 function tablaFolios(list){
   if(list.length===0){
     return `<div class="empty-state"><div class="ic">&#128193;</div><h3>Todavía no hay solicitudes</h3><p>Da clic en "Nueva solicitud" para registrar la primera, o carga tu Excel existente.</p></div>`;
@@ -679,18 +1248,23 @@ function tablaFolios(list){
   const rows = list.map(f=>{
     const cli = clienteById(f.idCliente);
     const total = costoTotalFolio(f.cr);
-    const utilidad = utilidadFolio(f.cr);
+    const uPlaneada = utilidadFolioPlaneada(f.cr);
+    const uReal = tieneGastosRealesAsignados(f.cr) ? money(utilidadFolioReal(f.cr)) : "<span class='muted small'>Sin gastos aún</span>";
+    const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
       <td class="cr-code">${f.cr}</td>
       <td>${fmtDate(f.fechaSolicitud)}</td>
       <td>${cli ? cli.empresa : "<span class='muted'>(sin cliente)</span>"}</td>
+      <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
       <td>${badgeHtml(f.status)}</td>
+      <td class="mono">${f.noOC || "<span class='muted'>-</span>"}</td>
       <td class="money right">${money(total)}</td>
-      <td class="money right" style="color:var(--ok)">${money(utilidad)}</td>
+      <td class="money right" style="color:var(--ok)">${money(uPlaneada)}</td>
+      <td class="right" style="color:var(--ok)">${uReal}</td>
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Status</th><th class="right">Costo final</th><th class="right">Utilidad</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -708,23 +1282,52 @@ function renderSolicitudes(){
       const o = document.createElement("option"); o.value=s.key; o.textContent=s.key; selStatus.appendChild(o);
     });
   }
+  const selCliente = document.getElementById("filterCliente");
+  const seleccionActual = selCliente.value;
+  selCliente.innerHTML = `<option value="">Todos los clientes</option>` +
+    empresasUnicas().map(e=>`<option value="${e}" ${e===seleccionActual?"selected":""}>${e}</option>`).join("");
   applySolicitudesFilter();
 }
-function applySolicitudesFilter(){
+function foliosFiltradosActuales(){
   const q = (document.getElementById("searchCR").value||"").toLowerCase();
   const st = document.getElementById("filterStatus").value;
+  const emp = document.getElementById("filterCliente").value;
   let list = state.folios.filter(f=>{
     const cli = clienteById(f.idCliente);
     const dets = detallesDe(f.cr);
     const haystack = [f.cr, cli?cli.empresa:"", f.contacto, ...dets.map(d=>d.descripcion), ...dets.map(d=>d.numeroParte)].join(" ").toLowerCase();
-    return (!q || haystack.includes(q)) && (!st || f.status===st);
+    return (!q || haystack.includes(q)) && (!st || f.status===st) && (!emp || (cli && cli.empresa===emp));
   });
   list.sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||""));
+  return list;
+}
+function applySolicitudesFilter(){
+  const list = foliosFiltradosActuales();
   document.getElementById("solicitudesTableWrap").innerHTML = tablaFolios(list);
   bindFolioRowClicks();
 }
 document.getElementById("searchCR").addEventListener("input", applySolicitudesFilter);
 document.getElementById("filterStatus").addEventListener("change", applySolicitudesFilter);
+document.getElementById("filterCliente").addEventListener("change", applySolicitudesFilter);
+function exportarSolicitudesFiltradas(){
+  const list = foliosFiltradosActuales();
+  if(list.length===0){ showToast("No hay solicitudes que coincidan con el filtro actual", true); return; }
+  const wb = XLSX.utils.book_new();
+  const encAoa = [ENC_HEADERS_CR, ...list.map(filaFolioExcel)];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(encAoa), "CR_Encabezado");
+  const crsIncluidos = new Set(list.map(f=>f.cr));
+  const detAoa = [DET_HEADERS_CR, ...state.detalles.filter(d=>crsIncluidos.has(d.cr)).map(filaDetalleExcel)];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detAoa), "CR_Detalle");
+  const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+  const blob = new Blob([wbout], {type:"application/octet-stream"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "CRs_filtradas_"+todayISO()+".xlsx";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast(list.length+" solicitud(es) exportada(s) a Excel");
+}
+document.getElementById("btnExportarSolicitudes").addEventListener("click", exportarSolicitudesFiltradas);
 
 /* =========================================================================
    CLIENTES
@@ -804,45 +1407,139 @@ function cerrarModales(){ document.querySelectorAll(".modal-bg").forEach(m=>m.cl
 document.querySelectorAll(".modal-bg").forEach(m=>m.addEventListener("click", (e)=>{ if(e.target===m) m.classList.remove("active"); }));
 
 /* =========================================================================
+   PROVEEDORES
+   ========================================================================= */
+function renderProveedores(){
+  const wrap = document.getElementById("proveedoresTableWrap");
+  if(state.proveedores.length===0){
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">&#128230;</div><h3>Sin proveedores registrados</h3><p>Agrega tu primer proveedor para tener su información a la mano.</p></div>`;
+    return;
+  }
+  const rows = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial)).map(p=>`
+    <tr data-id="${p.id}">
+      <td class="mono">${p.id}</td>
+      <td>${p.nombreComercial}</td>
+      <td>${p.contacto||"-"}</td>
+      <td>${p.telefono||"-"}</td>
+      <td>${p.correo||"-"}</td>
+      <td>${p.marcaPrincipal||"-"}</td>
+      <td style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${p.productos||""}">${p.productos||"<span class='muted'>-</span>"}</td>
+      <td class="right"><button class="btn btn-outline btn-sm" data-editprov="${p.id}">Editar</button></td>
+    </tr>`).join("");
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Nombre comercial</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>Marca principal</th><th>Productos</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.querySelectorAll("[data-editprov]").forEach(btn=>{
+    btn.addEventListener("click", (e)=>{ e.stopPropagation(); abrirModalProveedor(btn.dataset.editprov); });
+  });
+}
+function abrirModalProveedor(id){
+  const prov = id ? proveedorById(id) : null;
+  document.getElementById("proveedorModalTitle").textContent = prov ? "Editar proveedor" : "Nuevo proveedor";
+  document.getElementById("formProveedor").innerHTML = `
+    <div class="grid-2">
+      <div class="field"><label>Nombre comercial</label><input id="pf_nombre" value="${prov?prov.nombreComercial:""}"></div>
+      <div class="field"><label>Nombre del contacto</label><input id="pf_contacto" value="${prov?prov.contacto||"":""}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Teléfono</label><input id="pf_telefono" value="${prov?prov.telefono||"":""}"></div>
+      <div class="field"><label>Correo</label><input id="pf_correo" value="${prov?prov.correo||"":""}"></div>
+    </div>
+    <div class="field"><label>Dirección</label><input id="pf_direccion" value="${prov?prov.direccion||"":""}"></div>
+    <div class="field"><label>Marca principal que le compramos</label><input id="pf_marca" value="${prov?prov.marcaPrincipal||"":""}" placeholder="ej. Schneider Electric"></div>
+    <div class="field"><label>Productos que nos vende</label><textarea id="pf_productos" placeholder="Descripción general de lo que ofrece este proveedor">${prov?prov.productos||"":""}</textarea></div>
+    ${!prov?'<div class="note">El ID se genera solo: PR- + 3 letras del nombre comercial + consecutivo (ej. PR-SCH01).</div>':""}
+    <div class="flex-between" style="margin-top:10px;">
+      <button class="btn btn-outline" id="pf_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="pf_save">Guardar proveedor</button>
+    </div>
+  `;
+  document.getElementById("pf_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("pf_save").addEventListener("click", ()=>{
+    const nombreComercial = document.getElementById("pf_nombre").value.trim();
+    if(!nombreComercial){ showToast("Escribe el nombre comercial del proveedor", true); return; }
+    const data = {
+      id: prov ? prov.id : nextProveedorId(nombreComercial),
+      nombreComercial,
+      contacto: document.getElementById("pf_contacto").value.trim(),
+      telefono: document.getElementById("pf_telefono").value.trim(),
+      correo: document.getElementById("pf_correo").value.trim(),
+      direccion: document.getElementById("pf_direccion").value.trim(),
+      marcaPrincipal: document.getElementById("pf_marca").value.trim(),
+      productos: document.getElementById("pf_productos").value.trim()
+    };
+    if(prov){ Object.assign(prov, data); } else { state.proveedores.push(data); }
+    cerrarModales(); markDirty(); renderProveedores();
+    showToast("Proveedor guardado: "+data.id);
+  });
+  document.getElementById("modalProveedor").classList.add("active");
+}
+document.getElementById("btnNuevoProveedor").addEventListener("click", ()=>abrirModalProveedor(null));
+
+/* =========================================================================
    ACCIONES PENDIENTES
    ========================================================================= */
 function renderAcciones(){
   const wrap = document.getElementById("accionesTableWrap");
   const mostrarCompletadas = document.getElementById("chkMostrarCompletadas").checked;
-  let lista = state.acciones.filter(a=>mostrarCompletadas || !a.completada);
+  const mostrarEliminadas = document.getElementById("chkMostrarEliminadas").checked;
+  let lista = state.acciones.filter(a=>{
+    if(a.eliminada) return mostrarEliminadas;
+    return mostrarCompletadas || !a.completada;
+  });
   const rank = {"Alta":0,"Media":1,"Deseable":2};
   lista = [...lista].sort((a,b)=> (rank[a.prioridad]-rank[b.prioridad]) || (a.fecha||"").localeCompare(b.fecha||""));
   if(lista.length===0){
     wrap.innerHTML = `<div class="empty-state"><div class="ic">&#10003;</div><h3>Sin acciones pendientes</h3><p>Agrega la primera acción del negocio.</p></div>`;
     return;
   }
-  const rows = lista.map(a=>`
-    <tr class="${a.completada?'done-row':''}">
+  const rows = lista.map(a=>{
+    const fechaCierre = a.eliminada ? ("Eliminada "+fmtDate(a.fechaEliminada)) : (a.completada ? ("Completada "+fmtDate(a.fechaCompletada)) : "-");
+    return `<tr class="${(a.completada||a.eliminada)?'done-row':''}">
       <td><span class="badge ${PRIORIDAD_CLASS[a.prioridad]}">${a.prioridad}</span></td>
       <td>${a.descripcion}</td>
       <td>${a.responsable||"-"}</td>
       <td class="mono">${fmtDate(a.fecha)}</td>
+      <td class="mono">${fechaCierre}</td>
       <td class="right">
-        <button class="btn btn-outline btn-sm" data-toggle="${a.id}">${a.completada?"Reabrir":"Completar"}</button>
-        <button class="btn btn-outline btn-sm" data-delacc="${a.id}">Eliminar</button>
+        ${a.eliminada
+          ? `<button class="btn btn-outline btn-sm" data-restaurar="${a.id}">Restaurar</button>
+             <button class="btn btn-danger btn-sm" data-delacc-def="${a.id}">Eliminar definitivamente</button>`
+          : `<button class="btn btn-outline btn-sm" data-toggle="${a.id}">${a.completada?"Reabrir":"Completar"}</button>
+             <button class="btn btn-outline btn-sm" data-delacc="${a.id}">Eliminar</button>`}
       </td>
-    </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Prioridad</th><th>Descripción</th><th>Responsable</th><th>Agregada</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Prioridad</th><th>Descripción</th><th>Responsable</th><th>Agregada</th><th>Cierre</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   wrap.querySelectorAll("[data-toggle]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const a = state.acciones.find(x=>x.id===btn.dataset.toggle);
       a.completada = !a.completada;
+      a.fechaCompletada = a.completada ? todayISO() : "";
       markDirty(); renderAcciones(); renderDashboard();
     });
   });
   wrap.querySelectorAll("[data-delacc]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      state.acciones = state.acciones.filter(x=>x.id!==btn.dataset.delacc);
+      const a = state.acciones.find(x=>x.id===btn.dataset.delacc);
+      a.eliminada = true; a.fechaEliminada = todayISO();
+      markDirty(); renderAcciones(); renderDashboard();
+    });
+  });
+  wrap.querySelectorAll("[data-restaurar]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const a = state.acciones.find(x=>x.id===btn.dataset.restaurar);
+      a.eliminada = false; a.fechaEliminada = "";
+      markDirty(); renderAcciones(); renderDashboard();
+    });
+  });
+  wrap.querySelectorAll("[data-delacc-def]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.acciones = state.acciones.filter(x=>x.id!==btn.dataset.delaccDef);
       markDirty(); renderAcciones(); renderDashboard();
     });
   });
 }
 document.getElementById("chkMostrarCompletadas").addEventListener("change", renderAcciones);
+document.getElementById("chkMostrarEliminadas").addEventListener("change", renderAcciones);
 document.getElementById("btnNuevaAccion").addEventListener("click", ()=>{
   document.getElementById("formAccion").innerHTML = `
     <div class="field"><label>Descripción de la acción</label><textarea id="af_desc"></textarea></div>
@@ -866,7 +1563,7 @@ document.getElementById("btnNuevaAccion").addEventListener("click", ()=>{
       id: uid("AC"), descripcion:desc, fecha:todayISO(),
       responsable: document.getElementById("af_resp").value.trim(),
       prioridad: document.getElementById("af_prio").value,
-      completada:false
+      completada:false, fechaCompletada:"", eliminada:false, fechaEliminada:""
     });
     cerrarModales(); markDirty(); renderAcciones(); renderDashboard();
     showToast("Acción agregada");
@@ -900,38 +1597,68 @@ function renderGastos(){
       <td class="right mono">${money(gastoSubtotal(g))}</td>
       <td class="right mono">${g.ivaAplica!==false?money(gastoIva(g)):"NA"}</td>
       <td class="right money">${money(g.costoTotal)}</td>
-      <td class="right"><button class="btn btn-outline btn-sm" data-delgasto="${g.id}">Eliminar</button></td>
+      <td><select data-gastocr="${g.id}" style="width:auto; min-width:150px;">${opcionesCRGasto(g.crAsignada||"")}</select></td>
+      <td class="right" style="white-space:nowrap;">
+        <button class="btn btn-outline btn-sm" data-editgasto="${g.id}">Editar</button>
+        <button class="btn btn-outline btn-sm" data-delgasto="${g.id}">Eliminar</button>
+      </td>
     </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th>CR asignada</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.querySelectorAll("[data-gastocr]").forEach(sel=>{
+    sel.addEventListener("change", ()=>{
+      const g = state.gastos.find(x=>x.id===sel.dataset.gastocr);
+      if(g){ g.crAsignada = sel.value; markDirty(); render(); }
+    });
+  });
+  wrap.querySelectorAll("[data-editgasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.editgasto);
+      if(g) abrirModalGasto(null, g);
+    });
+  });
   wrap.querySelectorAll("[data-delgasto]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       state.gastos = state.gastos.filter(g=>g.id!==btn.dataset.delgasto);
-      markDirty(); renderGastos();
+      markDirty(); render();
     });
   });
 }
-document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
+function opcionesCRGasto(seleccionado){
+  const folios = [...state.folios].sort((a,b)=>b.cr.localeCompare(a.cr));
+  const opts = folios.map(f=>{
+    const cli = clienteById(f.idCliente);
+    const label = f.cr+" · "+(cli?cli.empresa:"(sin cliente)");
+    return `<option value="${f.cr}" ${seleccionado===f.cr?"selected":""}>${label}</option>`;
+  }).join("");
+  return `<option value="">Ninguna (gasto general del negocio)</option>`+opts;
+}
+function abrirModalGasto(crPreseleccionada, gastoExistente){
+  document.getElementById("gastoModalTitle").textContent = gastoExistente ? "Editar gasto" : "Nuevo gasto";
   document.getElementById("formGasto").innerHTML = `
     <div class="grid-2">
-      <div class="field"><label>Fecha</label><input type="date" id="gf_fecha" value="${todayISO()}"></div>
-      <div class="field"><label>Proveedor</label><input id="gf_prov"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="gf_fecha" value="${gastoExistente?gastoExistente.fecha:todayISO()}"></div>
+      <div class="field"><label>Proveedor</label><input id="gf_prov" value="${gastoExistente?gastoExistente.proveedor||"":""}"></div>
     </div>
-    <div class="field"><label>Concepto</label><input id="gf_concepto"></div>
+    <div class="field"><label>Concepto</label><input id="gf_concepto" value="${gastoExistente?gastoExistente.concepto||"":""}"></div>
     <div class="field">
       <label>Costo total del gasto (IVA incluido)</label>
-      <input type="number" step="0.01" id="gf_total" placeholder="0.00">
-      <label class="checkbox-row"><input type="checkbox" id="gf_ivaaplica" checked> Desglosar IVA (16%) automáticamente</label>
+      <input type="number" step="0.01" id="gf_total" placeholder="0.00" value="${gastoExistente?N(gastoExistente.costoTotal):""}">
+      <label class="checkbox-row"><input type="checkbox" id="gf_ivaaplica" ${!gastoExistente||gastoExistente.ivaAplica!==false?"checked":""}> Desglosar IVA (16%) automáticamente</label>
     </div>
     <div class="note" id="gf_preview">Subtotal: $0.00 &middot; IVA: $0.00</div>
+    <div class="field"><label>CR asignada <span class="hint">(opcional — si la eliges, este gasto resta directo de la utilidad de esa CR)</span></label>
+      <select id="gf_cr">${opcionesCRGasto(gastoExistente?(gastoExistente.crAsignada||""):(crPreseleccionada||""))}</select>
+    </div>
     <div class="flex-between">
       <button class="btn btn-outline" id="gf_cancel">Cancelar</button>
-      <button class="btn btn-primary" id="gf_save">Guardar gasto</button>
+      <button class="btn btn-primary" id="gf_save">${gastoExistente?"Guardar cambios":"Guardar gasto"}</button>
     </div>
   `;
   const actualizarPreview = ()=>{
     const g = {costoTotal: document.getElementById("gf_total").value, ivaAplica: document.getElementById("gf_ivaaplica").checked};
     document.getElementById("gf_preview").textContent = "Subtotal: "+money(gastoSubtotal(g))+" · IVA: "+(g.ivaAplica?money(gastoIva(g)):"NA");
   };
+  actualizarPreview();
   document.getElementById("gf_total").addEventListener("input", actualizarPreview);
   document.getElementById("gf_ivaaplica").addEventListener("change", actualizarPreview);
   document.getElementById("gf_cancel").addEventListener("click", cerrarModales);
@@ -940,117 +1667,132 @@ document.getElementById("btnNuevoGasto").addEventListener("click", ()=>{
     const total = document.getElementById("gf_total").value;
     if(!concepto){ showToast("Escribe el concepto del gasto", true); return; }
     if(!total || N(total)<=0){ showToast("Captura el costo total del gasto", true); return; }
-    state.gastos.push({
-      id: uid("GA"), fecha: document.getElementById("gf_fecha").value || todayISO(),
+    const datos = {
+      fecha: document.getElementById("gf_fecha").value || todayISO(),
       concepto, proveedor: document.getElementById("gf_prov").value.trim(),
-      costoTotal: N(total), ivaAplica: document.getElementById("gf_ivaaplica").checked
-    });
-    cerrarModales(); markDirty(); renderGastos();
-    showToast("Gasto agregado");
+      costoTotal: N(total), ivaAplica: document.getElementById("gf_ivaaplica").checked,
+      crAsignada: document.getElementById("gf_cr").value
+    };
+    if(gastoExistente){ Object.assign(gastoExistente, datos); } else { state.gastos.push({id: uid("GA"), ...datos}); }
+    cerrarModales(); markDirty(); render();
+    showToast(gastoExistente ? "Gasto actualizado" : "Gasto agregado");
   });
   document.getElementById("modalGasto").classList.add("active");
-});
+}
+document.getElementById("btnNuevoGasto").addEventListener("click", ()=>abrirModalGasto(""));
 
 /* =========================================================================
-   UTILIDAD REAL VS. PLANEADA
+   BALANCE DEL NEGOCIO
    ========================================================================= */
-function foliosConPlan(){
-  return state.folios.filter(f=>f.status!==CANCEL_KEY);
+function mesDeFecha(fecha){ return (fecha||"").slice(0,7); } // "YYYY-MM"
+function nombreMes(yyyyMM){
+  if(!yyyyMM) return "Sin fecha";
+  const [y,m] = yyyyMM.split("-");
+  const nombres = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  return (nombres[N(m)-1]||"?")+" "+y;
 }
-function utilidadRealFolio(f){
-  return f.status==="Finalizada" ? utilidadFolio(f.cr) : 0;
+function balancePorMes(){
+  const meses = {};
+  const asegurar = (m)=>{ if(!meses[m]) meses[m] = {mes:m, ingresos:0, inyecciones:0, gastos:0}; return meses[m]; };
+  state.ingresos.forEach(i=>{ asegurar(mesDeFecha(i.fecha)).ingresos += N(i.monto); });
+  state.inyecciones.forEach(i=>{ asegurar(mesDeFecha(i.fecha)).inyecciones += N(i.monto); });
+  state.gastos.forEach(g=>{ asegurar(mesDeFecha(g.fecha)).gastos += N(g.costoTotal); });
+  return Object.values(meses).sort((a,b)=>b.mes.localeCompare(a.mes));
 }
-function renderUtilidadView(){
-  const cont = document.getElementById("utilidadContent");
-  if(!cont) return;
-  const conPlan = foliosConPlan();
+function balanceGeneral(){
+  const totalIngresos = state.ingresos.reduce((s,i)=>s+N(i.monto),0);
+  const totalInyecciones = state.inyecciones.reduce((s,i)=>s+N(i.monto),0);
+  const totalGastos = state.gastos.reduce((s,g)=>s+N(g.costoTotal),0);
+  return { totalIngresos, totalInyecciones, totalGastos, balance: totalIngresos+totalInyecciones-totalGastos };
+}
+function renderBalance(){
+  const b = balanceGeneral();
+  document.getElementById("balanceStatCards").innerHTML = `
+    <div class="stat-card"><div class="label">Balance general</div><div class="value" style="color:${b.balance>=0?'var(--ok)':'var(--danger)'}">${money(b.balance)}</div></div>
+    <div class="stat-card"><div class="label">Ingresos (CRs pagadas)</div><div class="value blue">${money(b.totalIngresos)}</div></div>
+    <div class="stat-card"><div class="label">Inyecciones de capital</div><div class="value blue">${money(b.totalInyecciones)}</div></div>
+    <div class="stat-card"><div class="label">Gastos totales</div><div class="value" style="color:var(--danger)">${money(b.totalGastos)}</div></div>
+  `;
+  const meses = balancePorMes();
+  if(meses.length===0){
+    document.getElementById("balanceMesWrap").innerHTML = `<p class="small muted">Todavía no hay movimientos registrados.</p>`;
+  } else {
+    const filas = meses.map(m=>{
+      const balMes = m.ingresos + m.inyecciones - m.gastos;
+      return `<tr>
+        <td>${nombreMes(m.mes)}</td>
+        <td class="right mono">${money(m.ingresos)}</td>
+        <td class="right mono">${money(m.inyecciones)}</td>
+        <td class="right mono" style="color:var(--danger)">${money(m.gastos)}</td>
+        <td class="right money" style="color:${balMes>=0?'var(--ok)':'var(--danger)'}">${money(balMes)}</td>
+      </tr>`;
+    }).join("");
+    document.getElementById("balanceMesWrap").innerHTML = `<table class="tbl"><thead><tr><th>Mes</th><th class="right">Ingresos</th><th class="right">Inyecciones</th><th class="right">Gastos</th><th class="right">Balance</th></tr></thead><tbody>${filas}</tbody></table>`;
+  }
 
-  if(chartUtilidadInstance){ chartUtilidadInstance.destroy(); chartUtilidadInstance=null; }
+  const movimientos = [
+    ...state.ingresos.map(i=>({tipo:"Ingreso", fecha:i.fecha, concepto:i.concepto||("Pago recibido - "+i.cr), monto:N(i.monto), id:i.id})),
+    ...state.inyecciones.map(i=>({tipo:"Inyección", fecha:i.fecha, concepto:"Inyección de "+i.nombre+(i.notas?(" — "+i.notas):""), monto:N(i.monto), id:i.id, borrable:true})),
+    ...state.gastos.map(g=>({tipo:"Gasto", fecha:g.fecha, concepto:g.concepto+(g.crAsignada?(" (asignado a "+g.crAsignada+")"):""), monto:-N(g.costoTotal)}))
+  ].sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
-  if(conPlan.length===0){
-    cont.innerHTML = `<div class="empty-state"><div class="ic">&#128200;</div><h3>Todavía no hay CRs registradas</h3><p>Crea tu primera solicitud para empezar a comparar utilidad planeada vs. real.</p></div>`;
+  if(movimientos.length===0){
+    document.getElementById("balanceMovimientosWrap").innerHTML = `<div class="empty-state"><div class="ic">&#128200;</div><h3>Sin movimientos</h3><p>Los ingresos aparecen solos cuando marcas una CR como pagada; agrega gastos o inyecciones para verlos aquí.</p></div>`;
     return;
   }
-  if(!window.Chart){
-    cont.innerHTML = `<div class="empty-state"><div class="ic">&#9888;</div><h3>No se pudo cargar la librería de gráficos</h3><p>Esta pantalla necesita internet la primera vez que abres la app (carga Chart.js desde una CDN). Verifica tu conexión y recarga. Mientras tanto, aquí está la tabla:</p></div>`;
-    cont.innerHTML += `<div class="card" style="padding:0;"><div id="utilidadTableWrap"></div></div>`;
-    pintarTablaUtilidad(conPlan, document.getElementById("utilidadTableWrap"));
-    return;
-  }
-
-  const totalPlaneada = conPlan.reduce((s,f)=>s+utilidadFolio(f.cr),0);
-  const totalReal = conPlan.reduce((s,f)=>s+utilidadRealFolio(f),0);
-  const variacion = totalReal - totalPlaneada;
-  const pctCumplimiento = totalPlaneada!==0 ? (totalReal/totalPlaneada*100) : 0;
-
-  cont.innerHTML = `
-    <div class="cards-row">
-      <div class="stat-card"><div class="label">Utilidad planeada (todas las CRs)</div><div class="value blue">${money(totalPlaneada)}</div></div>
-      <div class="stat-card"><div class="label">Utilidad real (solo finalizadas)</div><div class="value" style="color:var(--ok)">${money(totalReal)}</div></div>
-      <div class="stat-card"><div class="label">Aún no realizada</div><div class="value" style="color:${variacion<=0?'var(--danger)':'var(--ok)'}">${money(totalPlaneada-totalReal)}</div></div>
-      <div class="stat-card"><div class="label">% ya realizado</div><div class="value">${pctCumplimiento.toFixed(0)}%</div></div>
+  const filasMov = movimientos.map(m=>`
+    <tr>
+      <td class="mono">${fmtDate(m.fecha)}</td>
+      <td><span class="badge ${m.tipo==='Gasto'?'prio-alta':'prio-deseable'}">${m.tipo}</span></td>
+      <td>${m.concepto}</td>
+      <td class="right money" style="color:${m.monto>=0?'var(--ok)':'var(--danger)'}">${m.monto>=0?"+":""}${money(m.monto)}</td>
+      <td class="right" style="white-space:nowrap;">${m.borrable?`<button class="btn btn-outline btn-sm" data-editinyeccion="${m.id}">Editar</button> <button class="btn btn-outline btn-sm" data-delinyeccion="${m.id}">Eliminar</button>`:""}</td>
+    </tr>`).join("");
+  document.getElementById("balanceMovimientosWrap").innerHTML = `<table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="right">Monto</th><th></th></tr></thead><tbody>${filasMov}</tbody></table>`;
+  document.getElementById("balanceMovimientosWrap").querySelectorAll("[data-editinyeccion]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const i = state.inyecciones.find(x=>x.id===btn.dataset.editinyeccion);
+      if(i) abrirModalInyeccion(i);
+    });
+  });
+  document.getElementById("balanceMovimientosWrap").querySelectorAll("[data-delinyeccion]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.inyecciones = state.inyecciones.filter(i=>i.id!==btn.dataset.delinyeccion);
+      markDirty(); renderBalance();
+    });
+  });
+}
+function abrirModalInyeccion(inyeccionExistente){
+  document.getElementById("inyeccionModalTitle").textContent = inyeccionExistente ? "Editar inyección de capital" : "Nueva inyección de capital";
+  document.getElementById("formInyeccion").innerHTML = `
+    <div class="field"><label>Nombre de quien hace la inyección</label><input id="iny_nombre" value="${inyeccionExistente?inyeccionExistente.nombre||"":""}"></div>
+    <div class="grid-2">
+      <div class="field"><label>Fecha</label><input type="date" id="iny_fecha" value="${inyeccionExistente?inyeccionExistente.fecha:todayISO()}"></div>
+      <div class="field"><label>Monto</label><input type="number" step="0.01" id="iny_monto" placeholder="0.00" value="${inyeccionExistente?N(inyeccionExistente.monto):""}"></div>
     </div>
-    <div class="card">
-      <h3>Planeada vs. real por mes de solicitud — todas las CRs</h3>
-      <div style="position:relative; height:280px;"><canvas id="chartUtilidad"></canvas></div>
-    </div>
-    <div class="card" style="padding:0;">
-      <div id="utilidadTableWrap"></div>
+    <div class="field"><label>Notas <span class="hint">(opcional)</span></label><textarea id="iny_notas">${inyeccionExistente?inyeccionExistente.notas||"":""}</textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-outline" id="iny_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="iny_save">${inyeccionExistente?"Guardar cambios":"Guardar inyección"}</button>
     </div>
   `;
-
-  const meses = [...new Set(conPlan.map(f=>(f.fechaSolicitud||"").slice(0,7)))].filter(Boolean).sort();
-  const dataPlaneada = meses.map(m=>conPlan.filter(f=>(f.fechaSolicitud||"").slice(0,7)===m).reduce((s,f)=>s+utilidadFolio(f.cr),0));
-  const dataReal = meses.map(m=>conPlan.filter(f=>(f.fechaSolicitud||"").slice(0,7)===m).reduce((s,f)=>s+utilidadRealFolio(f),0));
-  const labelsMes = meses.map(m=>{
-    const [y,mm] = m.split("-");
-    return new Date(y, mm-1, 1).toLocaleDateString("es-MX",{month:"short", year:"2-digit"});
+  document.getElementById("iny_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("iny_save").addEventListener("click", ()=>{
+    const nombre = document.getElementById("iny_nombre").value.trim();
+    const monto = document.getElementById("iny_monto").value;
+    if(!nombre){ showToast("Escribe el nombre de quien hace la inyección", true); return; }
+    if(!monto || N(monto)<=0){ showToast("Captura el monto de la inyección", true); return; }
+    const datos = {
+      nombre, fecha: document.getElementById("iny_fecha").value || todayISO(),
+      monto: N(monto), notas: document.getElementById("iny_notas").value.trim()
+    };
+    if(inyeccionExistente){ Object.assign(inyeccionExistente, datos); } else { state.inyecciones.push({id: uid("IY"), ...datos}); }
+    cerrarModales(); markDirty(); renderBalance();
+    showToast(inyeccionExistente ? "Inyección actualizada" : "Inyección agregada");
   });
-
-  const ctx = document.getElementById("chartUtilidad");
-  if(ctx){
-    chartUtilidadInstance = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: labelsMes,
-        datasets: [
-          {label:"Planeada", data:dataPlaneada, backgroundColor:"#94a3b8"},
-          {label:"Real", data:dataReal, backgroundColor:"#145da0"}
-        ]
-      },
-      options: {
-        responsive:true,
-        maintainAspectRatio:false,
-        plugins:{ legend:{ position:"bottom" } },
-        scales:{ y:{ beginAtZero:true, ticks:{ callback:(v)=>money(v) } } }
-      }
-    });
-  }
-
-  pintarTablaUtilidad(conPlan, document.getElementById("utilidadTableWrap"));
+  document.getElementById("modalInyeccion").classList.add("active");
 }
-function pintarTablaUtilidad(conPlan, wrap){
-  if(!wrap) return;
-  const filas = [...conPlan].sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||"")).map(f=>{
-    const cli = clienteById(f.idCliente);
-    const plan = utilidadFolio(f.cr);
-    const real = utilidadRealFolio(f);
-    const finalizada = f.status==="Finalizada";
-    const dif = real - plan;
-    return `<tr data-cr="${f.cr}">
-      <td class="cr-code">${f.cr}</td>
-      <td>${cli?cli.empresa:"-"}</td>
-      <td>${badgeHtml(f.status)}</td>
-      <td class="right money">${money(plan)}</td>
-      <td class="right money" style="color:${finalizada?'var(--ok)':'var(--text-400)'}">${finalizada?money(real):"Pendiente"}</td>
-      <td class="right money" style="color:${!finalizada?'var(--text-400)':(dif>=0?'var(--ok)':'var(--danger)')}">${finalizada?((dif>=0?"+":"")+money(dif)):"-"}</td>
-    </tr>`;
-  }).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>Folio</th><th>Cliente</th><th>Status</th><th class="right">Planeada</th><th class="right">Real</th><th class="right">Variación</th></tr></thead><tbody>${filas}</tbody></table>`;
-  wrap.querySelectorAll("tr[data-cr]").forEach(tr=>{
-    tr.addEventListener("click", ()=>{ currentCR = tr.dataset.cr; goto("detalle"); });
-  });
-}
+document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>abrirModalInyeccion(null));
 
 /* =========================================================================
    CONFIGURACIÓN
@@ -1062,18 +1804,10 @@ function renderConfig(){
   document.getElementById("cfg_formapago").value = state.config.formaPago||"";
   document.getElementById("cfg_condentrega").value = state.config.condicionEntrega||"";
   document.getElementById("cfg_condcom").value = state.config.condicionesComerciales||"";
+  document.getElementById("cfgMsAccountLabel").textContent = (typeof cuentaActiva!=="undefined" && cuentaActiva) ? cuentaActiva.username : "Ninguna";
+  document.getElementById("cfgMsFileLabel").textContent = (typeof excelFileRef!=="undefined" && excelFileRef) ? EXCEL_FILENAME : "Ninguno";
+  document.getElementById("cfgPdfFolderLabel").textContent = pdfFolderRef ? "2_Cotizaciones (OneDrive)" : "Ninguna";
 }
-document.getElementById("btnElegirCarpetaPdf").addEventListener("click", async ()=>{
-  if(!window.showDirectoryPicker){
-    showToast("Tu navegador no soporta elegir carpeta directo; se descargará normal.", true);
-    return;
-  }
-  try{
-    pdfDirHandle = await window.showDirectoryPicker();
-    document.getElementById("pdfFolderLabel").textContent = "Carpeta: "+pdfDirHandle.name;
-    showToast("Carpeta elegida para guardar PDFs");
-  }catch(err){ /* usuario canceló */ }
-});
 document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
   state.config.empresaCorreo = document.getElementById("cfg_correo").value.trim();
   state.config.empresaTelefono = document.getElementById("cfg_telefono").value.trim();
@@ -1207,7 +1941,7 @@ function guardarNuevaSolicitud(){
     correoContacto: document.getElementById("sf_correo").value.trim(),
     telContacto: document.getElementById("sf_telefono").value.trim(),
     status: "Pendiente",
-    fechas: {}, noOC:"", notasGenerales:"",
+    fechas: {}, noOC:"", notasGenerales:"", tipoCambio:18,
     cancelada:false, motivoCancelacion:"", fechaCancelacion:""
   };
   ensureFechas(folio);
@@ -1218,7 +1952,7 @@ function guardarNuevaSolicitud(){
       cr, noRenglon:i+1, descripcion:r.descripcion.trim(), cantidad:N(r.cantidad)||1,
       numeroParte:r.numeroParte.trim(), tiempoEntregaValor:r.tiempoEntregaValor, tiempoEntregaUnidad:r.tiempoEntregaUnidad||"días",
       link:r.link.trim(), notas:r.notas.trim(),
-      costoArticulo:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"",
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"",
       otros:[], pctGanancia:""
     });
   });
@@ -1272,13 +2006,17 @@ function safeId(cr, rn){ return String(cr).replace(/[^A-Za-z0-9]/g,"_") + "_" + 
 function setText(id, txt){ const el = document.getElementById(id); if(el) el.textContent = txt; }
 function refrescarTotalesFolio(cr){
   setText("costoTotalFolioDisplay", money(costoTotalFolio(cr)));
-  setText("utilidadTotalFolioDisplay", money(utilidadFolio(cr)));
+  setText("utilidadPlaneadaFolioDisplay", money(utilidadFolioPlaneada(cr)));
+  setText("utilidadRealFolioDisplay", tieneGastosRealesAsignados(cr) ? money(utilidadFolioReal(cr)) : "Sin gastos registrados aún");
 }
 function refrescarRenglon(d){
   const sid = safeId(d.cr, d.noRenglon);
   const ivaInput = document.getElementById("ivaInput-"+sid);
   if(ivaInput && ivaEsAuto(d)) ivaInput.value = ivaValue(d).toFixed(2);
+  const costoInput = document.getElementById("costoArticuloInput-"+sid);
+  if(costoInput && d.costoArticuloUSD!==undefined && d.costoArticuloUSD!=="") costoInput.value = d.costoArticulo;
   setText("costoArtTotal-"+sid, money(costoArticuloTotal(d)));
+  setText("costoConIva-"+sid, money(costoConIva(d)/(N(d.cantidad)||1)));
   setText("cantLabel-"+sid, "(x"+d.cantidad+")");
   setText("costoTotalRenglon-"+sid, money(costoTotalRenglon(d)));
   setText("precioUnitFinal-"+sid, money(precioUnitarioFinal(d)));
@@ -1296,49 +2034,65 @@ function renderDetalle(){
   const cli = clienteById(folio.idCliente);
   const dets = detallesDe(folio.cr);
   const totalFinal = costoTotalFolio(folio.cr);
-  const utilidadTotal = utilidadFolio(folio.cr);
+  const utilidadPlaneada = utilidadFolioPlaneada(folio.cr);
+  const hayGastosReales = tieneGastosRealesAsignados(folio.cr);
+  const utilidadReal = hayGastosReales ? money(utilidadFolioReal(folio.cr)) : "Sin gastos registrados aún";
   const fpp = fechaProbablePago(folio);
   const idx = STATUS_FLOW.findIndex(s=>s.key===folio.status);
   const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
+  const mostrarOCPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="PO Recibida") || (folio.status===CANCEL_KEY && folio.noOC);
 
+  const costosBloqueados = !puedeAgregarItems;
   const renglonesHtml = dets.map(d=>{
     const auto = ivaEsAuto(d);
     const sid = safeId(d.cr, d.noRenglon);
+    const dis = costosBloqueados ? "disabled" : "";
     return `<div class="renglon-box">
+      ${!costosBloqueados ? `<button class="btn btn-outline btn-sm rem" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>` : ""}
       <div class="renglon-num">Renglón ${d.noRenglon} &middot; ${d.numeroParte||"s/n"}</div>
       <div class="grid-2">
         <div><strong>${d.descripcion}</strong><div class="small muted">Entrega: ${tiempoEntregaTexto(d)} ${d.link?('&middot; <a href="'+d.link+'" target="_blank">link</a>'):""}</div></div>
         <div class="right"><div class="money" id="precioFinalTop-${sid}">${money(precioFinalRenglon(d))}</div><div class="small muted" id="precioUnitTop-${sid}">${money(precioUnitarioFinal(d))} c/u</div></div>
       </div>
       <div class="small muted" style="margin:6px 0;">${d.notas?("Notas: "+d.notas):""}</div>
+      ${costosBloqueados ? `<div class="note" style="margin-bottom:10px;">Costos bloqueados: la OC ya fue recibida. Usa "Regresar" en el status si de verdad necesitas corregir algo.</div>` : ""}
       <div class="grid-4">
-        <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}"></div>
-        <div class="field"><label>Costo artículo (por pieza, sin IVA)</label><input data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="NA o monto/pza"></div>
+        <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}" ${dis}></div>
+        <div class="field">
+          <label>Costo artículo (por pieza, sin IVA)</label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input id="costoArticuloInput-${sid}" data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="MXN" ${dis}>
+            <span class="small muted">o</span>
+            <input data-costusd data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticuloUSD||""}" placeholder="USD" ${dis}>
+          </div>
+          <span class="hint">USD × tipo de cambio (${money(N(folio.tipoCambio)||18)}) = MXN, o captura MXN directo</span>
+        </div>
         <div class="field">
           <label>IVA artículo ($, total lote)</label>
-          <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${auto?"disabled":""} placeholder="NA o monto">
-          <label class="checkbox-row"><input type="checkbox" data-ivaauto data-cr="${d.cr}" data-rn="${d.noRenglon}" ${auto?"checked":""}> Automático (16% x cant.)</label>
+          <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${(auto||costosBloqueados)?"disabled":""} placeholder="NA o monto">
+          <label class="checkbox-row"><input type="checkbox" data-ivaauto data-cr="${d.cr}" data-rn="${d.noRenglon}" ${auto?"checked":""} ${dis}> Automático (16% x cant.)</label>
         </div>
         <div class="kv" style="align-self:end;"><span class="k">Costo artículo total <span id="cantLabel-${sid}">(x${d.cantidad})</span></span><span class="v mono" id="costoArtTotal-${sid}">${money(costoArticuloTotal(d))}</span></div>
       </div>
+      <div class="kv"><span class="k">Costo artículo + IVA (por pieza)</span><span class="v mono" id="costoConIva-${sid}">${money(costoConIva(d)/(N(d.cantidad)||1))}</span></div>
       <div class="grid-4">
-        <div class="field"><label>Costo recolección <span class="hint">(lote)</span></label><input data-cost="recoleccion" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.recoleccion}" placeholder="NA o monto"></div>
-        <div class="field"><label>Costo entrega <span class="hint">(lote)</span></label><input data-cost="entrega" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.entrega}" placeholder="NA o monto"></div>
-        <div class="field"><label>Empaque <span class="hint">(lote)</span></label><input data-cost="empaque" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.empaque}" placeholder="NA o monto"></div>
-        <div class="field"><label>Mano de obra <span class="hint">(lote)</span></label><input data-cost="manoObra" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.manoObra}" placeholder="NA o monto"></div>
+        <div class="field"><label>Costo recolección <span class="hint">(lote)</span></label><input data-cost="recoleccion" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.recoleccion}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Costo entrega <span class="hint">(lote)</span></label><input data-cost="entrega" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.entrega}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Empaque <span class="hint">(lote)</span></label><input data-cost="empaque" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.empaque}" placeholder="NA o monto" ${dis}></div>
+        <div class="field"><label>Mano de obra <span class="hint">(lote)</span></label><input data-cost="manoObra" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.manoObra}" placeholder="NA o monto" ${dis}></div>
       </div>
       <div class="otros-wrap">
         <label style="font-size:11.5px;font-weight:700;color:var(--text-600);text-transform:uppercase;">Otros costos extra (lote)</label>
         ${(d.otros||[]).map(o=>`
           <div class="otro-row">
-            <input data-otrodesc data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.desc}" placeholder="Descripción">
-            <input data-otromonto data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.monto}" placeholder="Monto" style="max-width:120px;">
-            <button class="btn btn-outline btn-sm" data-otrorem data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}">&times;</button>
+            <input data-otrodesc data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.desc}" placeholder="Descripción" ${dis}>
+            <input data-otromonto data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}" value="${o.monto}" placeholder="Monto" style="max-width:120px;" ${dis}>
+            ${!costosBloqueados ? `<button class="btn btn-outline btn-sm" data-otrorem data-cr="${d.cr}" data-rn="${d.noRenglon}" data-oid="${o.id}">&times;</button>` : ""}
           </div>`).join("")}
-        <button class="btn btn-outline btn-sm" data-otroadd data-cr="${d.cr}" data-rn="${d.noRenglon}">+ Agregar costo extra</button>
+        ${!costosBloqueados ? `<button class="btn btn-outline btn-sm" data-otroadd data-cr="${d.cr}" data-rn="${d.noRenglon}">+ Agregar costo extra</button>` : ""}
       </div>
       <div class="grid-3" style="margin-top:10px;">
-        <div class="field"><label>% de ganancia</label><input data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25"></div>
+        <div class="field"><label>% de ganancia</label><input data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25" ${dis}></div>
         <div class="kv" style="align-self:end;"><span class="k">Precio final por pieza</span><span class="v money" id="precioUnitFinal-${sid}">${money(precioUnitarioFinal(d))}</span></div>
         <div class="kv" style="align-self:end;"><span class="k">Utilidad del renglón</span><span class="v money" id="utilidadRenglon-${sid}" style="color:var(--ok)">${money(utilidadRenglon(d))}</span></div>
       </div>
@@ -1354,14 +2108,16 @@ function renderDetalle(){
   } else if(folio.status==="Esperando Cotización"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Registrar cotización recibida &rarr; Cotización Recibida</button>`;
   } else if(folio.status==="Cotización Recibida"){
-    accionesHtml = `<button class="btn btn-dark" id="btnGenerarPropuesta">Generar Propuesta (PDF) &rarr; Propuesta Enviada</button>
-                     <button class="btn btn-outline" id="btnAbrirCorreo">Preparar correo</button>
-                     <button class="btn btn-outline" id="btnWhatsapp">Enviar por WhatsApp</button>`;
+    accionesHtml = `<button class="btn btn-dark" id="btnGenerarPropuesta">Generar Propuesta (PDF) &rarr; Propuesta Enviada</button>`;
   } else if(folio.status==="Propuesta Enviada"){
     accionesHtml = `
       <div class="grid-2">
         <div class="field"><label>No. de OC del cliente</label><input id="inpOC" value="${folio.noOC}"></div>
         <div class="field" style="align-self:end;"><button class="btn btn-primary" id="btnAvanzar">Registrar OC &rarr; PO Recibida</button></div>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px;">
+        <button class="btn btn-outline" id="btnAbrirCorreo">Preparar correo</button>
+        <button class="btn btn-outline" id="btnWhatsapp">Enviar por WhatsApp</button>
       </div>`;
   } else if(folio.status==="PO Recibida"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura generada &rarr; Factura Generada</button>
@@ -1392,6 +2148,7 @@ function renderDetalle(){
       <div>
         <h1 class="page-title mono">${folio.cr}</h1>
         <p class="page-sub">${cli?cli.empresa:"(sin cliente)"} &middot; Solicitado el ${fmtDate(folio.fechaSolicitud)}</p>
+        ${mostrarOCPersistente ? `<p class="small" style="margin:6px 0 0; display:flex; align-items:center; gap:6px;"><span class="muted">No. de OC del cliente:</span> <input id="inpOCPersistente" value="${folio.noOC||""}" style="width:auto; max-width:180px; padding:3px 8px; font-size:12.5px;"></p>` : ""}
       </div>
       <div>${badgeHtml(folio.status)}</div>
     </div>
@@ -1411,10 +2168,20 @@ function renderDetalle(){
 
     <div class="card">
       <h3>Datos del contacto</h3>
-      <div class="grid-3">
-        <div class="kv"><span class="k">Contacto</span><span class="v">${folio.contacto||"-"}</span></div>
-        <div class="kv"><span class="k">Correo</span><span class="v">${folio.correoContacto||"-"}</span></div>
-        <div class="kv"><span class="k">Teléfono</span><span class="v">${folio.telContacto||"-"}</span></div>
+      <div class="grid-2">
+        <div class="field"><label>Empresa / Cliente</label>
+          <select id="dc_empresa">
+            <option value="">Selecciona...</option>
+            ${empresasUnicas().map(e=>`<option value="${e}" ${cli&&cli.empresa===e?"selected":""}>${e}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Contacto</label>
+          <select id="dc_contactoSel" ${cli?"":"disabled"}>${opcionesContactoPorEmpresa(cli?cli.empresa:"", folio.idCliente)}</select>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Correo</label><input id="dc_correo" value="${folio.correoContacto||""}"></div>
+        <div class="field"><label>Teléfono</label><input id="dc_telefono" value="${folio.telContacto||""}"></div>
       </div>
       <div class="kv"><span class="k">Entregar en</span><span class="v">${(cli&&cli.direccion)?cli.direccion:"<span class='muted'>Sin dirección en el cliente — agrégala en Clientes</span>"}</span></div>
     </div>
@@ -1422,13 +2189,75 @@ function renderDetalle(){
     <div class="card">
       <div class="flex-between">
         <h3>Renglones cotizados</h3>
-        ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label class="small muted" style="text-transform:none; font-weight:600; white-space:nowrap;">Tipo de cambio USD&rarr;MXN</label>
+            <input id="inpTipoCambio" type="number" step="0.01" min="0" value="${folio.tipoCambio!==undefined&&folio.tipoCambio!==""?folio.tipoCambio:18}" style="width:90px;" ${costosBloqueados?"disabled":""}>
+          </div>
+          ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
+        </div>
       </div>
       ${renglonesHtml}
       <div class="divider"></div>
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
-      <div class="kv" style="font-size:15px;"><span class="k">Utilidad total del folio</span><span class="v money" id="utilidadTotalFolioDisplay" style="color:var(--ok)">${money(utilidadTotal)}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Utilidad planeada <span class="hint">(según costos del renglón)</span></span><span class="v money" id="utilidadPlaneadaFolioDisplay" style="color:var(--ok)">${money(utilidadPlaneada)}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Utilidad real <span class="hint">(precio − gastos reales asignados)</span></span><span class="v money" id="utilidadRealFolioDisplay" style="color:var(--ok)">${utilidadReal}</span></div>
     </div>
+
+    <div class="card">
+      <div class="flex-between">
+        <h3>Gastos reales de esta CR</h3>
+        <button class="btn btn-outline btn-sm" id="btnAgregarGastoCR">+ Agregar gasto a esta CR</button>
+      </div>
+      ${gastosDeCR(folio.cr).length ? `
+        <table class="tbl">
+          <thead><tr><th>Fecha</th><th>Concepto</th><th>Proveedor</th><th class="right">Monto</th><th></th></tr></thead>
+          <tbody>
+            ${gastosDeCR(folio.cr).map(g=>`
+              <tr>
+                <td class="mono">${fmtDate(g.fecha)}</td>
+                <td>${g.concepto}</td>
+                <td>${g.proveedor||"-"}</td>
+                <td class="right money">${money(N(g.costoTotal))}</td>
+                <td class="right" style="white-space:nowrap;">
+                  <button class="btn btn-outline btn-sm" data-editgasto="${g.id}">Editar</button>
+                  <button class="btn btn-outline btn-sm" data-quitargasto="${g.id}">Quitar de esta CR</button>
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="kv" style="margin-top:6px;"><span class="k">Total de gastos reales asignados</span><span class="v money">${money(gastosAsignadosTotal(folio.cr))}</span></div>
+      ` : `<p class="small muted">Sin gastos reales registrados todavía para esta CR — la utilidad real se calculará conforme los vayas agregando.</p>`}
+    </div>
+
+    ${folio.noOC ? `
+    <div class="card">
+      <div class="flex-between">
+        <h3>Órdenes de compra a proveedores</h3>
+        <button class="btn btn-outline btn-sm" id="btnGenerarPO">+ Generar PO a proveedor</button>
+      </div>
+      ${posDeCR(folio.cr).length ? `
+        <table class="tbl">
+          <thead><tr><th>PO</th><th>Proveedor</th><th>Fecha</th><th class="right">Total</th><th></th></tr></thead>
+          <tbody>
+            ${posDeCR(folio.cr).map(po=>{
+              const prov = proveedorById(po.idProveedor);
+              return `<tr>
+                <td class="mono">${po.folio}</td>
+                <td>${prov?prov.nombreComercial:"(proveedor eliminado)"}</td>
+                <td class="mono">${fmtDate(po.fecha)}</td>
+                <td class="right money">${money(totalPO(po))} ${po.moneda||"MXN"}</td>
+                <td class="right"><button class="btn btn-outline btn-sm" data-regenerarpo="${po.folio}">Volver a generar PDF</button></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      ` : `<p class="small muted">Aún no se ha generado ninguna PO para esta CR.</p>`}
+    </div>` : `
+    <div class="card">
+      <h3>Órdenes de compra a proveedores</h3>
+      <p class="small muted">Disponible en cuanto captures el número de OC del cliente.</p>
+    </div>`}
 
     <div class="card">
       <h3>Fechas de trazabilidad (ajuste manual si es necesario)</h3>
@@ -1444,6 +2273,26 @@ function renderDetalle(){
       markDirty(); refrescarRenglon(d);
     });
   });
+  cont.querySelectorAll("[data-costusd]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const d = state.detalles.find(x=>x.cr===inp.dataset.cr && x.noRenglon==inp.dataset.rn);
+      d.costoArticuloUSD = inp.value;
+      d.costoArticulo = inp.value==="" ? d.costoArticulo : (N(inp.value) * (N(folio.tipoCambio)||18)).toFixed(2);
+      markDirty(); refrescarRenglon(d);
+    });
+  });
+  const inpTipoCambio = document.getElementById("inpTipoCambio");
+  if(inpTipoCambio){
+    inpTipoCambio.addEventListener("input", ()=>{
+      folio.tipoCambio = inpTipoCambio.value;
+      dets.forEach(d=>{
+        if(d.costoArticuloUSD!==undefined && d.costoArticuloUSD!==""){
+          d.costoArticulo = (N(d.costoArticuloUSD) * (N(folio.tipoCambio)||18)).toFixed(2);
+        }
+      });
+      markDirty(); renderDetalle();
+    });
+  }
   cont.querySelectorAll("[data-ivaauto]").forEach(chk=>{
     chk.addEventListener("change", ()=>{
       const d = state.detalles.find(x=>x.cr===chk.dataset.cr && x.noRenglon==chk.dataset.rn);
@@ -1490,8 +2339,11 @@ function renderDetalle(){
     btnRegresarStatus.addEventListener("click", ()=>{
       const idxAhora = STATUS_FLOW.findIndex(s=>s.key===folio.status);
       if(idxAhora>0){
+        if(folio.status==="Pago Recibido"){
+          state.ingresos = state.ingresos.filter(i=>i.cr!==folio.cr); // se deshace el ingreso automático de esta CR
+        }
         folio.status = STATUS_FLOW[idxAhora-1].key;
-        markDirty(); renderDetalle();
+        markDirty(); renderDetalle(); renderBalance();
         showToast("Status regresado a: "+folio.status);
       }
     });
@@ -1509,7 +2361,13 @@ function renderDetalle(){
       if(flowNow && flowNow.next){
         folio.status = flowNow.next;
         if(!folio.fechas[folio.status]) folio.fechas[folio.status] = todayISO();
-        markDirty(); renderDetalle();
+        if(folio.status==="Pago Recibido" && !state.ingresos.some(i=>i.cr===folio.cr)){
+          state.ingresos.push({
+            id: uid("IN"), cr: folio.cr, fecha: folio.fechas[folio.status],
+            concepto: "Pago recibido - "+folio.cr, monto: costoTotalFolio(folio.cr)
+          });
+        }
+        markDirty(); renderDetalle(); renderBalance();
         showToast("Status actualizado a: "+folio.status);
       }
     });
@@ -1522,6 +2380,63 @@ function renderDetalle(){
   if(btnWa) btnWa.addEventListener("click", ()=>enviarWhatsapp(folio, cli));
   const btnAgregarItem = document.getElementById("btnAgregarItem");
   if(btnAgregarItem) btnAgregarItem.addEventListener("click", ()=>abrirModalAgregarItem(folio));
+  cont.querySelectorAll("[data-editaritem]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const d = state.detalles.find(x=>x.cr===btn.dataset.cr && x.noRenglon==btn.dataset.rn);
+      if(d) abrirModalEditarItem(d);
+    });
+  });
+  cont.querySelectorAll("[data-goto]").forEach(a=>{
+    a.addEventListener("click", (e)=>{ e.preventDefault(); goto(a.dataset.goto); });
+  });
+  const btnAgregarGastoCR = document.getElementById("btnAgregarGastoCR");
+  if(btnAgregarGastoCR) btnAgregarGastoCR.addEventListener("click", ()=>abrirModalGasto(folio.cr));
+  cont.querySelectorAll("[data-editgasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.editgasto);
+      if(g) abrirModalGasto(null, g);
+    });
+  });
+  cont.querySelectorAll("[data-quitargasto]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const g = state.gastos.find(x=>x.id===btn.dataset.quitargasto);
+      if(g){ g.crAsignada = ""; markDirty(); render(); showToast("Gasto desasignado de esta CR (sigue en Gastos)"); }
+    });
+  });
+  const btnGenerarPO = document.getElementById("btnGenerarPO");
+  if(btnGenerarPO) btnGenerarPO.addEventListener("click", ()=>abrirModalPO(folio));
+  cont.querySelectorAll("[data-regenerarpo]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const po = state.pos.find(p=>p.folio===btn.dataset.regenerarpo);
+      if(po) await generarPOPDF(po, proveedorById(po.idProveedor), folio);
+    });
+  });
+  const dcEmpresa = document.getElementById("dc_empresa");
+  const dcContacto = document.getElementById("dc_contactoSel");
+  if(dcEmpresa){
+    dcEmpresa.addEventListener("change", ()=>{
+      dcContacto.disabled = !dcEmpresa.value;
+      dcContacto.innerHTML = opcionesContactoPorEmpresa(dcEmpresa.value, "");
+    });
+  }
+  if(dcContacto){
+    dcContacto.addEventListener("change", ()=>{
+      const nuevoCli = clienteById(dcContacto.value);
+      if(!nuevoCli) return;
+      folio.idCliente = nuevoCli.id;
+      folio.contacto = nuevoCli.contacto||"";
+      folio.correoContacto = nuevoCli.correo||"";
+      folio.telContacto = nuevoCli.telefono||"";
+      markDirty(); renderDetalle();
+      showToast("Cliente de la CR actualizado a: "+nuevoCli.empresa);
+    });
+  }
+  const dcCorreo = document.getElementById("dc_correo");
+  if(dcCorreo) dcCorreo.addEventListener("change", ()=>{ folio.correoContacto = dcCorreo.value.trim(); markDirty(); });
+  const dcTelefono = document.getElementById("dc_telefono");
+  if(dcTelefono) dcTelefono.addEventListener("change", ()=>{ folio.telContacto = dcTelefono.value.trim(); markDirty(); });
+  const inpOCPersistente = document.getElementById("inpOCPersistente");
+  if(inpOCPersistente) inpOCPersistente.addEventListener("change", ()=>{ folio.noOC = inpOCPersistente.value.trim(); markDirty(); });
 }
 
 /* =========================================================================
@@ -1558,12 +2473,55 @@ function abrirModalAgregarItem(folio){
       numeroParte: document.getElementById("ai_parte").value.trim(),
       tiempoEntregaValor: document.getElementById("ai_tiempoVal").value, tiempoEntregaUnidad: document.getElementById("ai_tiempoUnidad").value,
       link: document.getElementById("ai_link").value.trim(), notas: document.getElementById("ai_notas").value.trim(),
-      costoArticulo:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"", otros:[], pctGanancia:""
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"", otros:[], pctGanancia:""
     });
     cerrarModales(); markDirty(); renderDetalle();
     showToast("Item agregado al folio "+folio.cr);
   });
   document.getElementById("modalAgregarItem").classList.add("active");
+}
+
+/* =========================================================================
+   EDITAR DATOS INICIALES DE UN RENGLÓN YA EXISTENTE
+   ========================================================================= */
+function abrirModalEditarItem(d){
+  document.getElementById("formEditarItem").innerHTML = `
+    <div class="field"><label>Descripción del artículo</label><input id="ei_desc" value="${d.descripcion||""}"></div>
+    <div class="grid-3">
+      <div class="field"><label>Cantidad</label><input type="number" min="1" id="ei_cant" value="${d.cantidad}"></div>
+      <div class="field"><label>Número de parte</label><input id="ei_parte" value="${d.numeroParte||""}"></div>
+      <div class="field"><label>Tiempo de entrega</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" min="0" style="width:70px;" id="ei_tiempoVal" value="${d.tiempoEntregaValor||""}">
+          <select id="ei_tiempoUnidad">
+            <option value="días" ${d.tiempoEntregaUnidad==="días"?"selected":""}>días</option>
+            <option value="semanas" ${d.tiempoEntregaUnidad==="semanas"?"selected":""}>semanas</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="field"><label>Link</label><input id="ei_link" value="${d.link||""}"></div>
+    <div class="field"><label>Notas</label><textarea id="ei_notas">${d.notas||""}</textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-outline" id="ei_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="ei_save">Guardar cambios</button>
+    </div>
+  `;
+  document.getElementById("ei_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("ei_save").addEventListener("click", ()=>{
+    const desc = document.getElementById("ei_desc").value.trim();
+    if(!desc){ showToast("Escribe la descripción del artículo", true); return; }
+    d.descripcion = desc;
+    d.cantidad = N(document.getElementById("ei_cant").value)||1;
+    d.numeroParte = document.getElementById("ei_parte").value.trim();
+    d.tiempoEntregaValor = document.getElementById("ei_tiempoVal").value;
+    d.tiempoEntregaUnidad = document.getElementById("ei_tiempoUnidad").value;
+    d.link = document.getElementById("ei_link").value.trim();
+    d.notas = document.getElementById("ei_notas").value.trim();
+    cerrarModales(); markDirty(); renderDetalle();
+    showToast("Datos del renglón "+d.noRenglon+" actualizados");
+  });
+  document.getElementById("modalEditarItem").classList.add("active");
 }
 
 /* =========================================================================
@@ -1587,6 +2545,11 @@ function construirHtmlPropuesta(folio, cli, dets){
   const ivaMonto = subtotal*ivaPct;
   const total = subtotal+ivaMonto;
   const map = {
+    TituloDocumento: "COTIZACIÓN",
+    EtiquetaFolio: "No. Cotización",
+    TituloDestinatario: "DATOS DEL CLIENTE",
+    EtiquetaDireccion: "Entrega en",
+    EtiquetaVigencia: "Vigencia",
     NumeroCotizacion: qtFolio(folio.cr),
     Fecha: fmtDate(todayISO()),
     Vigencia: state.config.vigencia || "15 días",
@@ -1615,6 +2578,9 @@ function construirHtmlPropuesta(folio, cli, dets){
 async function generarPropuestaPDF(folio, cli, dets){
   if(dets.some(d=>N(precioFinalRenglon(d))<=0)){
     showToast("Falta capturar costos/ganancia en algún renglón", true); return;
+  }
+  if(dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
+    showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return;
   }
   const qt = qtFolio(folio.cr);
   showToast("Generando PDF...");
@@ -1659,14 +2625,184 @@ async function generarPropuestaPDF(folio, cli, dets){
 
     if(!folio.fechas["Propuesta Enviada"]) folio.fechas["Propuesta Enviada"] = todayISO();
     folio.status = "Propuesta Enviada";
-    folio.utilidadPlaneada = utilidadFolio(folio.cr);
-    folio.mesPlaneado = folio.fechas["Propuesta Enviada"].slice(0,7);
     markDirty(); renderDetalle();
     showToast("Propuesta "+qt+" generada");
   }catch(err){
     console.error(err);
     showToast("No se pudo generar el PDF. Revisa la consola.", true);
   }
+}
+
+/* =========================================================================
+   PO (ORDEN DE COMPRA) A PROVEEDORES — reutiliza la misma plantilla visual
+   de la cotización, con otras etiquetas y los costos que pagamos nosotros.
+   ========================================================================= */
+function construirFilasItemsPO(items, moneda){
+  return items.map((it,idx)=>{
+    const costoUnitario = costoUnitarioPO(it, moneda);
+    const subtotal = round2(costoUnitario * N(it.cantidad));
+    return `<tr style="border-bottom:1px solid #e5e7eb;">
+      <td align="center" style="padding:7px 6px;">${idx+1}</td>
+      <td align="center" style="padding:7px 6px;">${it.cantidad}</td>
+      <td align="center" style="padding:7px 6px;">PZA</td>
+      <td style="padding:7px 6px;">${it.descripcion}${it.numeroParte?(" ("+it.numeroParte+")"):""}</td>
+      <td align="center" style="padding:7px 6px;">${it.entrega||"-"}</td>
+      <td align="right" style="padding:7px 6px;">${money(costoUnitario)}</td>
+      <td align="right" style="padding:7px 6px;">${money(subtotal)}</td>
+    </tr>`;
+  }).join("");
+}
+function construirHtmlPO(po, proveedor, folio){
+  const moneda = po.moneda || "MXN";
+  const ivaPct = (po.ivaPct!==undefined && po.ivaPct!==null && po.ivaPct!=="") ? N(po.ivaPct) : 16;
+  const subtotal = totalPO(po);
+  const ivaMonto = round2(subtotal*(ivaPct/100));
+  const total = round2(subtotal+ivaMonto);
+  const map = {
+    TituloDocumento: "ORDEN DE COMPRA",
+    EtiquetaFolio: "No. Orden de Compra",
+    TituloDestinatario: "DATOS DEL PROVEEDOR",
+    EtiquetaDireccion: "Dirección",
+    EtiquetaVigencia: "Ref. CR",
+    NumeroCotizacion: po.folio,
+    Fecha: fmtDate(po.fecha),
+    Vigencia: folio.cr,
+    Moneda: moneda,
+    Empresa: proveedor?proveedor.nombreComercial:"",
+    Contacto: proveedor?proveedor.contacto||"":"",
+    Correo: proveedor?proveedor.correo||"":"",
+    Telefono: proveedor?proveedor.telefono||"":"",
+    EntregaEn: (proveedor && proveedor.direccion) ? proveedor.direccion : "-",
+    FormaPago: po.formaPago || "-",
+    TiempoEntrega: po.tiempoEntrega || "-",
+    CondicionEntrega: po.condicionEntrega || "-",
+    IVA: ivaPct+"%",
+    ItemsTable: construirFilasItemsPO(po.items, moneda),
+    CondicionesComerciales: (po.notas || "Favor de confirmar recepción y tiempo de entrega de esta orden de compra.").replace(/\n/g,"<br/>"),
+    Subtotal: money(subtotal),
+    IVAAmount: money(ivaMonto),
+    Total: money(total),
+    CorreoAMD: state.config.empresaCorreo || "",
+    TelefonoAMD: state.config.empresaTelefono || ""
+  };
+  let html = PDF_TEMPLATE;
+  Object.keys(map).forEach(k=>{ html = html.split("{{"+k+"}}").join(String(map[k])); });
+  return html;
+}
+async function generarPOPDF(po, proveedor, folio){
+  showToast("Generando PDF de la PO...");
+  try{
+    const htmlDoc = construirHtmlPO(po, proveedor, folio);
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-99999px";
+    iframe.style.top = "0";
+    iframe.style.width = "850px";
+    iframe.style.height = "1100px";
+    document.body.appendChild(iframe);
+    await new Promise(resolve=>{
+      iframe.onload = resolve;
+      iframe.srcdoc = htmlDoc;
+    });
+    await new Promise(r=>setTimeout(r, 80));
+    const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
+    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
+    document.body.removeChild(iframe);
+
+    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({unit:"pt", format:"letter"});
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth;
+    const imgHeight = canvas.height * imgWidth / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+    const TOLERANCIA = 12;
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+    while(heightLeft > TOLERANCIA){
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+    const pdfBlob = pdf.output("blob");
+    await guardarPOBlob(pdfBlob, po.folio+".pdf");
+    showToast("PO "+po.folio+" generada");
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo generar el PDF de la PO. Revisa la consola.", true);
+  }
+}
+function abrirModalPO(folio){
+  if(state.proveedores.length===0){
+    showToast("Primero agrega al menos un proveedor", true);
+    goto("proveedores");
+    return;
+  }
+  const dets = detallesDe(folio.cr);
+  const proveedoresOrdenados = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial));
+  const tiempoSugerido = dets.length ? tiempoEntregaTexto(dets[0]) : "";
+  document.getElementById("formPO").innerHTML = `
+    <div class="field"><label>Proveedor</label>
+      <select id="po_proveedor"><option value="">Selecciona...</option>${proveedoresOrdenados.map(p=>`<option value="${p.id}">${p.nombreComercial}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Renglones a incluir en esta PO</label>
+      ${dets.map(d=>`
+        <label class="checkbox-row" style="margin-bottom:8px; align-items:flex-start;">
+          <input type="checkbox" data-poitem="${d.noRenglon}" checked style="margin-top:2px;">
+          <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))} MXN/pza${d.costoArticuloUSD?(" ("+money(N(d.costoArticuloUSD))+" USD/pza)"):""}</span>
+        </label>`).join("")}
+    </div>
+    <div class="field"><label>Moneda a mostrar en la PO</label>
+      <select id="po_moneda">
+        <option value="MXN">Pesos (MXN)</option>
+        <option value="USD">Dólares (USD)</option>
+      </select>
+      <span class="hint">Si un renglón no tiene costo en USD capturado, se calcula con el tipo de cambio de esta CR.</span>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Forma de pago</label><input id="po_formapago" value="${state.config.formaPago||""}"></div>
+      <div class="field"><label>Tiempo de entrega</label><input id="po_tiempoentrega" value="${tiempoSugerido}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Condición de entrega</label><input id="po_condicionentrega" value="${state.config.condicionEntrega||""}"></div>
+      <div class="field"><label>% IVA</label><input type="number" step="0.01" id="po_iva" value="16"></div>
+    </div>
+    <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas"></textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-outline" id="po_cancel">Cancelar</button>
+      <button class="btn btn-primary" id="po_save">Generar PO y PDF</button>
+    </div>
+  `;
+  document.getElementById("po_cancel").addEventListener("click", cerrarModales);
+  document.getElementById("po_save").addEventListener("click", async ()=>{
+    const idProveedor = document.getElementById("po_proveedor").value;
+    if(!idProveedor){ showToast("Selecciona el proveedor", true); return; }
+    const seleccionados = Array.from(document.querySelectorAll("[data-poitem]:checked")).map(chk=>N(chk.dataset.poitem));
+    if(seleccionados.length===0){ showToast("Selecciona al menos un renglón", true); return; }
+    const items = dets.filter(d=>seleccionados.includes(d.noRenglon)).map(d=>({
+      descripcion: d.descripcion, numeroParte: d.numeroParte, cantidad: N(d.cantidad)||1,
+      costoUnitarioMXN: N(d.costoArticulo),
+      costoUnitarioUSD: d.costoArticuloUSD ? N(d.costoArticuloUSD) : round2(N(d.costoArticulo)/(N(folio.tipoCambio)||18)),
+      entrega: tiempoEntregaTexto(d)
+    }));
+    const po = {
+      folio: nextPOFolio(), cr: folio.cr, idProveedor, fecha: todayISO(),
+      moneda: document.getElementById("po_moneda").value,
+      formaPago: document.getElementById("po_formapago").value.trim(),
+      tiempoEntrega: document.getElementById("po_tiempoentrega").value.trim(),
+      condicionEntrega: document.getElementById("po_condicionentrega").value.trim(),
+      ivaPct: N(document.getElementById("po_iva").value),
+      items, notas: document.getElementById("po_notas").value.trim()
+    };
+    state.pos.push(po);
+    cerrarModales(); markDirty();
+    await generarPOPDF(po, proveedorById(idProveedor), folio);
+    renderDetalle();
+  });
+  document.getElementById("modalPO").classList.add("active");
 }
 
 function tablaItemsPlano(dets){
@@ -1750,18 +2886,29 @@ function enviarWhatsapp(folio, cli){
    DIRTY / RENDER GENERAL
    ========================================================================= */
 let isDirty = false;
-function markDirty(){ isDirty = true; document.getElementById("btnSave").disabled = false; }
+const AUTO_SAVE_DELAY_MS = 2000;
+let autoSaveTimer = null;
+function markDirty(){
+  isDirty = true;
+  const btn = document.getElementById("btnSave");
+  btn.disabled = false;
+  btn.textContent = "Guardando...";
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(()=>{ guardarExcelEnOneDrive(true); }, AUTO_SAVE_DELAY_MS);
+}
 function render(){
   renderDashboard();
   renderSolicitudes();
   renderClientes();
+  renderProveedores();
   renderAcciones();
   renderGastos();
-  renderUtilidadView();
+  renderBalance();
   renderConfig();
   if(currentCR) renderDetalle();
 }
 render();
+iniciarMsal();
 
 /* =========================================================================
    EXCEL: LECTURA ROBUSTA POR NOMBRE DE ENCABEZADO
@@ -1784,54 +2931,34 @@ function col(row, map, ...nombres){
   return "";
 }
 
-document.getElementById("btnOpen").addEventListener("click", async ()=>{
-  if(window.showOpenFilePicker){
-    try{
-      const [handle] = await window.showOpenFilePicker({types:[{description:"Excel", accept:{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":[".xlsx"]}}]});
-      fileHandle = handle;
-      const file = await handle.getFile();
-      await cargarArchivo(file);
-      return;
-    }catch(err){
-      if(err && err.name==="AbortError") return;
-    }
-  }
-  document.getElementById("fileInput").click();
-});
-document.getElementById("fileInput").addEventListener("change", async (e)=>{
-  const file = e.target.files[0];
-  if(file) await cargarArchivo(file);
-});
-
-async function cargarArchivo(file){
-  try{
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, {type:"array", cellDates:false});
-    importarWorkbook(wb);
-    loadedFileName = file.name;
-    document.getElementById("fileStatus").textContent = "Conectado: "+loadedFileName;
-    document.getElementById("fileStatus").classList.add("connected");
-    document.getElementById("btnSave").disabled = false;
-    isDirty = false;
-    currentCR = null;
-    render();
-    goto("dashboard");
-    showToast("Archivo cargado: "+state.clientes.length+" clientes, "+state.folios.length+" folios, "+state.detalles.length+" renglones");
-  }catch(err){
-    console.error(err);
-    showToast("No se pudo leer el archivo. Verifica que sea el Excel de Control de Cotizaciones.", true);
-  }
-}
 function excelSerialToISO(v){
   if(v===undefined||v===null||v==="") return "";
-  if(typeof v==="string"){ const d = new Date(v); return isNaN(d) ? "" : d.toISOString().slice(0,10); }
+  if(typeof v==="string"){
+    const s = v.trim();
+    if(!s) return "";
+    // Ya viene en ISO (yyyy-mm-dd), como lo escribe esta misma app: no hay ambigüedad.
+    const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if(iso) return `${iso[1]}-${String(iso[2]).padStart(2,"0")}-${String(iso[3]).padStart(2,"0")}`;
+    // Formato con separador / o - : en Excel MX casi siempre es DD/MM/AAAA, NO MM/DD/AAAA.
+    // new Date("04/08/2026") lo interpreta como 8-abril en vez de 4-agosto: por eso se parsea a mano.
+    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if(dmy){
+      let [, dd, mm, yyyy] = dmy;
+      if(yyyy.length===2) yyyy = (Number(yyyy)<70 ? "20" : "19") + yyyy;
+      dd = Number(dd); mm = Number(mm);
+      if(mm>12 && dd<=12){ [dd, mm] = [mm, dd]; } // por si alguien sí capturó MM/DD/AAAA
+      if(mm>=1 && mm<=12 && dd>=1 && dd<=31) return `${yyyy}-${String(mm).padStart(2,"0")}-${String(dd).padStart(2,"0")}`;
+    }
+    const d = new Date(s);
+    return isNaN(d) ? "" : d.toISOString().slice(0,10);
+  }
   const d = XLSX.SSF.parse_date_code(v);
   if(!d) return "";
   return `${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`;
 }
 
 function importarWorkbook(wb){
-  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[],
+  state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[], pos:[],
     config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:""}};
 
   if(wb.SheetNames.includes("Clientes")){
@@ -1857,10 +2984,13 @@ function importarWorkbook(wb){
         status, noOC:col(r,map,"No. OC Cliente"), notasGenerales:col(r,map,"Notas Generales"),
         cancelada:(status===CANCEL_KEY),
         motivoCancelacion:col(r,map,"Motivo Cancelación"), fechaCancelacion:excelSerialToISO(col(r,map,"Fecha Cancelación")),
+        tipoCambio: (col(r,map,"Tipo de Cambio USD")!=="") ? N(col(r,map,"Tipo de Cambio USD")) : 18,
         fechas:{}
       };
       ensureFechas(folio);
       folio.fechas["Pendiente"] = folio.fechaSolicitud;
+      folio.fechas["Esperando Cotización"] = excelSerialToISO(col(r,map,"Fecha Esperando Cotización"));
+      folio.fechas["Cotización Recibida"] = excelSerialToISO(col(r,map,"Fecha Cotización Recibida"));
       folio.fechas["Propuesta Enviada"] = excelSerialToISO(col(r,map,"Fecha Propuesta Enviada"));
       folio.fechas["PO Recibida"] = excelSerialToISO(col(r,map,"Fecha OC Recibida"));
       folio.fechas["Factura Generada"] = excelSerialToISO(col(r,map,"Fecha Factura Generada"));
@@ -1868,11 +2998,6 @@ function importarWorkbook(wb){
       folio.fechas["Pago Recibido"] = excelSerialToISO(col(r,map,"Fecha Pago Recibido"));
       folio.fechas["Complemento Generado"] = excelSerialToISO(col(r,map,"Fecha Complemento Generado"));
       folio.fechas["Finalizada"] = excelSerialToISO(col(r,map,"Fecha Finalizada"));
-      const upRaw = col(r,map,"Utilidad Planeada");
-      if(upRaw!==""){
-        folio.utilidadPlaneada = N(upRaw);
-        folio.mesPlaneado = (folio.fechas["Propuesta Enviada"]||"").slice(0,7);
-      }
       state.folios.push(folio);
     });
   }
@@ -1893,7 +3018,7 @@ function importarWorkbook(wb){
         tiempoEntregaUnidad: tieneEntregaCol ? (col(r,map,"Tiempo de Entrega (unidad)")||"días") : "días",
         link:col(r,map,"Link"),
         notas: tieneEntregaCol ? col(r,map,"Notas") : [col(r,map,"Notas"), col(r,map,"Proveedor")?("(Proveedor previo: "+col(r,map,"Proveedor")+")"):""].filter(Boolean).join(" "),
-        costoArticulo:col(r,map,"Costo Artículo sin IVA"),
+        costoArticulo:col(r,map,"Costo Artículo sin IVA"), costoArticuloUSD:col(r,map,"Costo Artículo USD"),
         ivaAuto:(ivaAutoRaw===true||ivaAutoRaw==="TRUE"), iva:col(r,map,"IVA Artículo ($)"),
         recoleccion:col(r,map,"Costo Recolección"), entrega:col(r,map,"Costo Entrega"),
         empaque:col(r,map,"Empaque"), manoObra:col(r,map,"Mano de Obra"),
@@ -1908,7 +3033,10 @@ function importarWorkbook(wb){
         id:String(col(r,map,"ID")), descripcion:col(r,map,"Descripción"),
         fecha:excelSerialToISO(col(r,map,"Fecha")), responsable:col(r,map,"Responsable"),
         prioridad:col(r,map,"Prioridad")||"Media",
-        completada:(col(r,map,"Completada")===true||col(r,map,"Completada")==="TRUE")
+        completada:(col(r,map,"Completada")===true||col(r,map,"Completada")==="TRUE"),
+        fechaCompletada:excelSerialToISO(col(r,map,"Fecha Completada")),
+        eliminada:(col(r,map,"Eliminada")===true||col(r,map,"Eliminada")==="TRUE"),
+        fechaEliminada:excelSerialToISO(col(r,map,"Fecha Eliminada"))
       });
     });
   }
@@ -1920,7 +3048,64 @@ function importarWorkbook(wb){
         id:String(col(r,map,"ID")), fecha:excelSerialToISO(col(r,map,"Fecha")),
         concepto:col(r,map,"Concepto"), proveedor:col(r,map,"Proveedor"),
         costoTotal:N(col(r,map,"Costo Total")),
-        ivaAplica: !(ivaAplicaRaw===false||ivaAplicaRaw==="FALSE")
+        ivaAplica: !(ivaAplicaRaw===false||ivaAplicaRaw==="FALSE"),
+        crAsignada: col(r,map,"CR Asignada")
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Proveedores")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Proveedores"], "ID_Proveedor");
+    filas.forEach(r=>{
+      state.proveedores.push({
+        id:String(col(r,map,"ID_Proveedor")), nombreComercial:col(r,map,"Nombre Comercial"),
+        contacto:col(r,map,"Nombre del Contacto"), telefono:col(r,map,"Teléfono"),
+        correo:col(r,map,"Correo"), direccion:col(r,map,"Dirección"),
+        marcaPrincipal:col(r,map,"Marca Principal"), productos:col(r,map,"Productos que nos vende")
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Ingresos")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Ingresos"], "ID");
+    filas.forEach(r=>{
+      state.ingresos.push({
+        id:String(col(r,map,"ID")), cr:col(r,map,"CR"), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        concepto:col(r,map,"Concepto"), monto:N(col(r,map,"Monto"))
+      });
+    });
+  }
+  if(wb.SheetNames.includes("Inyecciones")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Inyecciones"], "ID");
+    filas.forEach(r=>{
+      state.inyecciones.push({
+        id:String(col(r,map,"ID")), nombre:col(r,map,"Nombre"), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        monto:N(col(r,map,"Monto")), notas:col(r,map,"Notas")
+      });
+    });
+  }
+  if(wb.SheetNames.includes("POs_Encabezado")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["POs_Encabezado"], "PO (folio)");
+    filas.forEach(r=>{
+      state.pos.push({
+        folio:String(col(r,map,"PO (folio)")), cr:String(col(r,map,"CR")),
+        idProveedor:String(col(r,map,"ID_Proveedor")), fecha:excelSerialToISO(col(r,map,"Fecha")),
+        moneda: col(r,map,"Moneda")||"MXN",
+        formaPago: col(r,map,"Forma de Pago"), tiempoEntrega: col(r,map,"Tiempo de Entrega"),
+        condicionEntrega: col(r,map,"Condición de Entrega"),
+        ivaPct: (col(r,map,"% IVA")!=="") ? N(col(r,map,"% IVA")) : 16,
+        notas:col(r,map,"Notas"), items:[]
+      });
+    });
+  }
+  if(wb.SheetNames.includes("POs_Detalle")){
+    const {map, filas} = leerHojaPorEncabezado(wb.Sheets["POs_Detalle"], "PO (folio)");
+    filas.forEach(r=>{
+      const po = state.pos.find(p=>p.folio===String(col(r,map,"PO (folio)")));
+      if(!po) return;
+      po.items.push({
+        descripcion:col(r,map,"Descripción"), numeroParte:col(r,map,"Número de Parte"),
+        cantidad:N(col(r,map,"Cantidad"))||1,
+        costoUnitarioMXN:N(col(r,map,"Costo Unitario MXN")), costoUnitarioUSD:N(col(r,map,"Costo Unitario USD")),
+        entrega:col(r,map,"Entrega")
       });
     });
   }
@@ -1966,39 +3151,61 @@ function limpiarDatosResiduales(){
   const gastosVistos = new Map();
   state.gastos.forEach(g=>gastosVistos.set(g.id, g));
   state.gastos = [...gastosVistos.values()];
+
+  const proveedoresVistos = new Map();
+  state.proveedores.forEach(p=>proveedoresVistos.set(p.id, p));
+  state.proveedores = [...proveedoresVistos.values()];
+
+  const ingresosVistos = new Map();
+  state.ingresos.forEach(i=>ingresosVistos.set(i.id, i));
+  state.ingresos = [...ingresosVistos.values()];
+
+  const inyeccionesVistas = new Map();
+  state.inyecciones.forEach(i=>inyeccionesVistas.set(i.id, i));
+  state.inyecciones = [...inyeccionesVistas.values()];
+
+  const posVistas = new Map();
+  state.pos.forEach(p=>posVistas.set(p.folio, p));
+  state.pos = [...posVistas.values()];
 }
 
 /* =========================================================================
    EXCEL: GUARDAR
    ========================================================================= */
 document.getElementById("btnSave").addEventListener("click", async ()=>{
-  try{
-    const wb = exportarWorkbook();
-    const wbout = XLSX.write(wb, {bookType:"xlsx", type:"array"});
-    const blob = new Blob([wbout], {type:"application/octet-stream"});
-    if(fileHandle && fileHandle.createWritable){
-      try{
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        isDirty = false; document.getElementById("btnSave").disabled = true;
-        showToast("Guardado directamente en "+loadedFileName);
-        return;
-      }catch(err){ /* si falla, caemos a la descarga */ }
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = loadedFileName || "Control_Cotizaciones.xlsx";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-    isDirty = false; document.getElementById("btnSave").disabled = true;
-    showToast("Archivo descargado. Reemplaza la versión en tu OneDrive.");
-  }catch(err){
-    console.error(err);
-    showToast("Ocurrió un error al guardar", true);
-  }
+  document.getElementById("btnSave").textContent = "Guardando...";
+  await guardarExcelEnOneDrive(false);
 });
 
+const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
+  "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
+  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
+  "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
+  "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
+function filaFolioExcel(f){
+  ensureFechas(f);
+  const cli = clienteById(f.idCliente);
+  const fpp = fechaProbablePago(f);
+  return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
+    f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolioPlaneada(f.cr),
+    tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
+    f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
+    f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
+    f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
+    f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
+}
+const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
+  "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
+  "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
+  "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
+  "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
+function filaDetalleExcel(d){
+  return [d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
+    d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
+    d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
+    (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
+    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)];
+}
 function exportarWorkbook(){
   const wb = XLSX.utils.book_new();
 
@@ -2008,48 +3215,58 @@ function exportarWorkbook(){
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(clientesAoa), "Clientes");
 
-  const encHeaders = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
-    "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Total","Utilidad Planeada","QT (folio propuesta)",
-    "Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
-    "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
-    "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación"];
-  const encAoa = [encHeaders, ...state.folios.map(f=>{
-    ensureFechas(f);
-    const cli = clienteById(f.idCliente);
-    const fpp = fechaProbablePago(f);
-    return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
-      f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolio(f.cr), (f.utilidadPlaneada!==undefined?f.utilidadPlaneada:""), qtFolio(f.cr), f.fechas["Propuesta Enviada"],
-      f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
-      f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
-      f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||""];
-  })];
+  const encAoa = [ENC_HEADERS_CR, ...state.folios.map(filaFolioExcel)];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(encAoa), "CR_Encabezado");
 
-  const detHeaders = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
-    "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
-    "Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
-    "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
-    "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
-  const detAoa = [detHeaders, ...state.detalles.map(d=>[
-    d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
-    d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
-    d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
-    (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
-    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)
-  ])];
+  const detAoa = [DET_HEADERS_CR, ...state.detalles.map(filaDetalleExcel)];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detAoa), "CR_Detalle");
 
   const accAoa = [
-    ["ID","Descripción","Fecha","Responsable","Prioridad","Completada"],
-    ...state.acciones.map(a=>[a.id, a.descripcion, a.fecha, a.responsable, a.prioridad, a.completada])
+    ["ID","Descripción","Fecha","Responsable","Prioridad","Completada","Fecha Completada","Eliminada","Fecha Eliminada"],
+    ...state.acciones.map(a=>[a.id, a.descripcion, a.fecha, a.responsable, a.prioridad, a.completada, a.fechaCompletada||"", !!a.eliminada, a.fechaEliminada||""])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(accAoa), "Acciones_Pendientes");
 
   const gastosAoa = [
-    ["ID","Fecha","Concepto","Proveedor","Subtotal","IVA","Costo Total","IVA Aplica"],
-    ...state.gastos.map(g=>[g.id, g.fecha, g.concepto, g.proveedor, gastoSubtotal(g), gastoIva(g), N(g.costoTotal), g.ivaAplica!==false])
+    ["ID","Fecha","Concepto","Proveedor","Subtotal","IVA","Costo Total","IVA Aplica","CR Asignada"],
+    ...state.gastos.map(g=>[g.id, g.fecha, g.concepto, g.proveedor, gastoSubtotal(g), gastoIva(g), N(g.costoTotal), g.ivaAplica!==false, g.crAsignada||""])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(gastosAoa), "Gastos");
+
+  const provAoa = [
+    ["ID_Proveedor","Nombre Comercial","Nombre del Contacto","Teléfono","Correo","Dirección","Marca Principal","Productos que nos vende"],
+    ...state.proveedores.map(p=>[p.id, p.nombreComercial, p.contacto, p.telefono, p.correo, p.direccion, p.marcaPrincipal, p.productos])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(provAoa), "Proveedores");
+
+  const ingAoa = [
+    ["ID","CR","Fecha","Concepto","Monto"],
+    ...state.ingresos.map(i=>[i.id, i.cr, i.fecha, i.concepto, N(i.monto)])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ingAoa), "Ingresos");
+
+  const inyAoa = [
+    ["ID","Nombre","Fecha","Monto","Notas"],
+    ...state.inyecciones.map(i=>[i.id, i.nombre, i.fecha, N(i.monto), i.notas])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inyAoa), "Inyecciones");
+
+  const poEncAoa = [
+    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Moneda","Forma de Pago","Tiempo de Entrega","Condición de Entrega","% IVA","Notas","Total"],
+    ...state.pos.map(po=>{
+      const prov = proveedorById(po.idProveedor);
+      return [po.folio, po.cr, po.idProveedor, prov?prov.nombreComercial:"", po.fecha, po.moneda||"MXN",
+        po.formaPago||"", po.tiempoEntrega||"", po.condicionEntrega||"", (po.ivaPct!==undefined&&po.ivaPct!==null&&po.ivaPct!=="")?N(po.ivaPct):16,
+        po.notas||"", totalPO(po)];
+    })
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poEncAoa), "POs_Encabezado");
+
+  const poDetAoa = [
+    ["PO (folio)","No. Renglón","Descripción","Número de Parte","Cantidad","Costo Unitario MXN","Costo Unitario USD","Entrega"],
+    ...state.pos.flatMap(po=>(po.items||[]).map((it,idx)=>[po.folio, idx+1, it.descripcion, it.numeroParte||"", it.cantidad, N(it.costoUnitarioMXN), N(it.costoUnitarioUSD), it.entrega||""]))
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poDetAoa), "POs_Detalle");
 
   const cfgAoa = [
     ["Llave","Valor"],
