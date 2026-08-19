@@ -159,6 +159,34 @@
 
   [id$="TableWrap"]{overflow-x:auto;}
 
+  /* ===== Gráficos ===== */
+  :root{ --viz-planeada:#2a78d6; --viz-real:#eb6834; --viz-grid:#e1e0d9; --viz-axis:#c3c2b7; }
+  .viz-legend{display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin:2px 0 14px;}
+  .viz-legend-item{display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:var(--text-600);}
+  .viz-swatch{width:11px; height:11px; border-radius:2px; flex-shrink:0;}
+  .viz-legend-note{font-size:11.5px; color:var(--text-400); font-weight:400;}
+  .viz-scroll{overflow-x:auto; padding-bottom:4px;}
+  .viz-chart{display:flex; align-items:stretch; min-width:min-content;}
+  .viz-yaxis{display:flex; flex-direction:column; flex-shrink:0; width:52px; position:relative;}
+  .viz-plotcol{position:relative; flex:1; display:flex;}
+  .viz-gridlines{position:absolute; inset:0; pointer-events:none;}
+  .viz-gridline{position:absolute; left:0; right:0; border-top:1px solid var(--viz-grid);}
+  .viz-gridline.zero{border-top:1px solid var(--viz-axis);}
+  .viz-gridlabel{position:absolute; right:8px; transform:translateY(-50%); font-size:10.5px; font-family:var(--mono); color:var(--text-400); white-space:nowrap;}
+  .viz-groups{position:relative; display:flex; align-items:flex-start;}
+  .viz-group{display:flex; flex-direction:column; align-items:center; width:64px; flex-shrink:0;}
+  .viz-barzone{position:relative; width:40px;}
+  .viz-bar{width:16px; position:absolute; cursor:pointer; transition:filter .1s;}
+  .viz-bar:hover, .viz-bar:focus-visible{filter:brightness(1.12);}
+  .viz-bar.planeada{background:var(--viz-planeada); left:0;}
+  .viz-bar.real{background:var(--viz-real); left:20px;}
+  .viz-bar.pending{background:transparent; border:1.5px dashed var(--gray-400); box-sizing:border-box; left:20px; width:16px;}
+  .viz-axislabel{margin-top:8px; font-size:9.5px; font-family:var(--mono); color:var(--text-400); font-weight:600; white-space:nowrap; max-width:60px; overflow:hidden; text-overflow:ellipsis;}
+  .viz-tooltip{position:fixed; background:var(--navy-950); color:#fff; border-radius:7px; padding:9px 11px; font-size:12px; line-height:1.5; pointer-events:none; z-index:200; box-shadow:0 8px 24px rgba(0,0,0,.3); display:none; max-width:220px;}
+  .viz-tooltip .tt-title{font-weight:700; margin-bottom:3px; font-family:var(--mono);}
+  .viz-tooltip .tt-row{display:flex; justify-content:space-between; gap:14px;}
+  .viz-tooltip .tt-key{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px;}
+
   /* ===== Responsivo ===== */
   @media (max-width: 860px){
     #topbar .file-status{display:none;}
@@ -208,6 +236,7 @@
     <button class="nav-item" data-view="acciones"><span class="ic">&#10003;</span> Acciones pendientes</button>
     <button class="nav-item" data-view="gastos"><span class="ic">&#128176;</span> Gastos</button>
     <button class="nav-item" data-view="balance"><span class="ic">&#128200;</span> Balance</button>
+    <button class="nav-item" data-view="graficos"><span class="ic">&#128202;</span> Gráficos</button>
     <button class="nav-item" data-view="config"><span class="ic">&#9881;</span> Configuración</button>
     <div class="nav-sep"></div>
     <button class="nav-item" id="btnNuevaSolicitudNav"><span class="ic">+</span> Nueva solicitud</button>
@@ -322,6 +351,33 @@
           <h3 style="margin:0;">Movimientos</h3>
         </div>
         <div id="balanceMovimientosWrap"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-graficos">
+      <h1 class="page-title">Gráficos</h1>
+      <p class="page-sub">Visualiza el desempeño de tus cotizaciones.</p>
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:2px;">
+          <div>
+            <h3 style="margin-bottom:2px;">Utilidad planeada vs. real por CR</h3>
+            <p class="small muted" style="margin:0;">La utilidad real solo se calcula una vez que se registran los gastos reales del folio.</p>
+          </div>
+          <button class="btn btn-outline btn-sm" id="btnToggleTablaUtilidad">Ver como tabla</button>
+        </div>
+        <div class="search-row" style="margin:16px 0 4px;">
+          <select id="filterClienteGrafico" style="max-width:260px;"><option value="">Todos los clientes</option></select>
+          <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" id="chkIncluirCanceladasGrafico"> Incluir canceladas</label>
+        </div>
+        <div class="cards-row" id="utilidadStatCards" style="margin-bottom:6px;"></div>
+        <div class="viz-legend">
+          <span class="viz-legend-item"><span class="viz-swatch" style="background:var(--viz-planeada);"></span>Utilidad planeada</span>
+          <span class="viz-legend-item"><span class="viz-swatch" style="background:var(--viz-real);"></span>Utilidad real</span>
+          <span class="viz-legend-item"><span class="viz-swatch" style="background:transparent; border:1.5px dashed var(--gray-400);"></span>Sin gastos aún</span>
+          <span class="viz-legend-note">Pasa el cursor sobre una barra para ver el detalle</span>
+        </div>
+        <div id="chartUtilidadWrap"></div>
+        <div id="tablaUtilidadWrap" style="display:none;"></div>
       </div>
     </div>
 
@@ -450,6 +506,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="viz-tooltip" id="vizTooltip"></div>
 
 <div id="errorBanner" style="display:none; position:fixed; top:66px; left:50%; transform:translateX(-50%); max-width:600px; width:92vw; background:#b3432e; color:#fff; padding:16px 20px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:200; white-space:pre-wrap; font-size:13px; line-height:1.5;">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
@@ -1795,6 +1853,191 @@ function abrirModalInyeccion(inyeccionExistente){
 document.getElementById("btnNuevaInyeccion").addEventListener("click", ()=>abrirModalInyeccion(null));
 
 /* =========================================================================
+   GRÁFICOS
+   ========================================================================= */
+function moneyCompact(v){
+  const sign = v<0 ? "-" : "";
+  const abs = Math.abs(v);
+  let s;
+  if(abs>=1000000) s = (abs/1000000).toLocaleString("es-MX",{maximumFractionDigits:1})+"M";
+  else if(abs>=1000) s = (abs/1000).toLocaleString("es-MX",{maximumFractionDigits:0})+"K";
+  else s = abs.toLocaleString("es-MX",{maximumFractionDigits:0});
+  return sign+"$"+s;
+}
+function nombreClienteFolio(f){
+  const cli = clienteById(f.idCliente);
+  return cli ? cli.empresa : "(sin cliente)";
+}
+function datosUtilidadPorCR(){
+  const emp = document.getElementById("filterClienteGrafico").value;
+  const incluirCanceladas = document.getElementById("chkIncluirCanceladasGrafico").checked;
+  return state.folios
+    .filter(f=>{
+      if(!incluirCanceladas && f.status===CANCEL_KEY) return false;
+      if(emp){ const cli = clienteById(f.idCliente); if(!cli || cli.empresa!==emp) return false; }
+      return true;
+    })
+    .map(f=>{
+      const tieneReal = tieneGastosRealesAsignados(f.cr);
+      return {
+        cr: f.cr, fecha: f.fechaSolicitud, status: f.status, cliente: nombreClienteFolio(f),
+        planeada: utilidadFolioPlaneada(f.cr),
+        tieneReal, real: tieneReal ? utilidadFolioReal(f.cr) : null
+      };
+    })
+    .sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+}
+function tickValuesUtilidad(minVal, maxVal){
+  const range = Math.max(maxVal - minVal, 1);
+  const rough = range/4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough/mag;
+  const step = (norm<=1?1:norm<=2?2:norm<=5?5:10)*mag;
+  const niceMax = maxVal<=0 ? 0 : Math.ceil(maxVal/step)*step;
+  const niceMin = minVal>=0 ? 0 : Math.floor(minVal/step)*step;
+  const ticks = [];
+  for(let v=niceMin; v<=niceMax+1e-6; v+=step) ticks.push(round2(v));
+  return { ticks, niceMin, niceMax };
+}
+let vizTooltipHideTimer = null;
+function mostrarVizTooltip(ev, html){
+  const tt = document.getElementById("vizTooltip");
+  clearTimeout(vizTooltipHideTimer);
+  tt.innerHTML = html;
+  tt.style.display = "block";
+  const rect = ev.currentTarget.getBoundingClientRect();
+  let left = rect.left + rect.width/2 - tt.offsetWidth/2;
+  left = Math.max(8, Math.min(left, window.innerWidth - tt.offsetWidth - 8));
+  const top = Math.max(8, rect.top - tt.offsetHeight - 10);
+  tt.style.left = left+"px";
+  tt.style.top = top+"px";
+}
+function ocultarVizTooltip(){
+  const tt = document.getElementById("vizTooltip");
+  vizTooltipHideTimer = setTimeout(()=>{ tt.style.display="none"; }, 60);
+}
+function renderGraficoUtilidad(){
+  const selCliente = document.getElementById("filterClienteGrafico");
+  const seleccionActual = selCliente.value;
+  selCliente.innerHTML = `<option value="">Todos los clientes</option>` +
+    empresasUnicas().map(e=>`<option value="${e}" ${e===seleccionActual?"selected":""}>${e}</option>`).join("");
+
+  const datos = datosUtilidadPorCR();
+
+  const totalPlaneada = datos.reduce((s,d)=>s+d.planeada,0);
+  const conReal = datos.filter(d=>d.tieneReal);
+  const totalReal = conReal.reduce((s,d)=>s+d.real,0);
+  const diferencia = totalReal - conReal.reduce((s,d)=>s+d.planeada,0);
+  document.getElementById("utilidadStatCards").innerHTML = `
+    <div class="stat-card"><div class="label">Utilidad planeada (${datos.length} CR)</div><div class="value" style="color:var(--ok)">${money(totalPlaneada)}</div></div>
+    <div class="stat-card"><div class="label">Utilidad real (${conReal.length} con gastos)</div><div class="value" style="color:var(--ok)">${money(totalReal)}</div></div>
+    <div class="stat-card"><div class="label">Diferencia real vs. planeada</div><div class="value" style="color:${diferencia>=0?'var(--ok)':'var(--danger)'}">${diferencia>=0?"+":""}${money(diferencia)}</div></div>
+    <div class="stat-card"><div class="label">CRs sin gastos registrados</div><div class="value">${datos.length-conReal.length}</div></div>
+  `;
+
+  document.getElementById("tablaUtilidadWrap").innerHTML = datos.length===0
+    ? `<div class="empty-state"><div class="ic">&#128202;</div><h3>No hay CRs para mostrar</h3><p>Ajusta los filtros o registra tu primera solicitud.</p></div>`
+    : `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Status</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th></tr></thead><tbody>${
+        datos.map(d=>`<tr data-cr="${d.cr}">
+          <td class="cr-code">${d.cr}</td>
+          <td>${fmtDate(d.fecha)}</td>
+          <td>${d.cliente}</td>
+          <td>${badgeHtml(d.status)}</td>
+          <td class="right money" style="color:${d.planeada>=0?'var(--ok)':'var(--danger)'}">${money(d.planeada)}</td>
+          <td class="right money" style="color:${d.tieneReal?(d.real>=0?'var(--ok)':'var(--danger)'):'var(--text-400)'}">${d.tieneReal?money(d.real):"Sin gastos aún"}</td>
+        </tr>`).join("")
+      }</tbody></table>`;
+  document.getElementById("tablaUtilidadWrap").querySelectorAll("tr[data-cr]").forEach(tr=>{
+    tr.addEventListener("click", ()=>{ currentCR = tr.dataset.cr; goto("detalle"); });
+  });
+
+  const wrap = document.getElementById("chartUtilidadWrap");
+  if(datos.length===0){
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">&#128202;</div><h3>No hay CRs para mostrar</h3><p>Ajusta los filtros o registra tu primera solicitud.</p></div>`;
+    return;
+  }
+  const PLOT_H = 220;
+  const valores = datos.flatMap(d=>d.tieneReal ? [d.planeada, d.real] : [d.planeada]);
+  const maxVal = Math.max(0, ...valores);
+  const minVal = Math.min(0, ...valores);
+  const { ticks, niceMin, niceMax } = tickValuesUtilidad(minVal, maxVal);
+  const topTick = niceMax, bottomTick = niceMin;
+  const totalRange = (topTick - bottomTick) || 1;
+  const scale = PLOT_H / totalRange;
+  const baselineY = (topTick - 0) * scale;
+
+  const gridHtml = ticks.map(t=>{
+    const y = (topTick - t) * scale;
+    return `<div class="viz-gridline ${t===0?'zero':''}" style="top:${y}px;"></div><div class="viz-gridlabel" style="top:${y}px;">${moneyCompact(t)}</div>`;
+  }).join("");
+
+  const barTop = (v)=> v>=0 ? baselineY - v*scale : baselineY;
+  const barHeight = (v)=> v===0 ? 0 : Math.max(Math.abs(v)*scale, 1);
+
+  const groupsHtml = datos.map(d=>{
+    const pTop = barTop(d.planeada), pH = barHeight(d.planeada);
+    const pRadius = d.planeada>=0 ? "border-radius:4px 4px 0 0;" : "border-radius:0 0 4px 4px;";
+    let realBarHtml;
+    if(d.tieneReal){
+      const rTop = barTop(d.real), rH = barHeight(d.real);
+      const rRadius = d.real>=0 ? "border-radius:4px 4px 0 0;" : "border-radius:0 0 4px 4px;";
+      realBarHtml = `<div class="viz-bar real" tabindex="0" style="top:${rTop}px; height:${rH}px; ${rRadius}" data-tip="real"></div>`;
+    } else {
+      realBarHtml = `<div class="viz-bar pending" tabindex="0" style="top:${baselineY-4}px; height:8px;" data-tip="pending"></div>`;
+    }
+    return `<div class="viz-group">
+      <div class="viz-barzone" style="height:${PLOT_H}px;">
+        <div class="viz-bar planeada" tabindex="0" style="top:${pTop}px; height:${pH}px; ${pRadius}" data-tip="planeada"></div>
+        ${realBarHtml}
+      </div>
+      <div class="viz-axislabel" title="${d.cr} · ${d.cliente}">${d.cr.replace('CR-','')}</div>
+    </div>`;
+  }).join("");
+
+  wrap.innerHTML = `<div class="viz-scroll"><div class="viz-chart">
+    <div class="viz-yaxis"><div class="viz-gridlines" style="height:${PLOT_H}px;">${gridHtml}</div></div>
+    <div class="viz-plotcol"><div class="viz-groups">${groupsHtml}</div></div>
+  </div></div>`;
+
+  wrap.querySelectorAll(".viz-group").forEach((g, i)=>{
+    const d = datos[i];
+    g.querySelectorAll(".viz-bar").forEach(bar=>{
+      const tipo = bar.dataset.tip;
+      const handler = (ev)=>{
+        let html;
+        if(tipo==="planeada"){
+          html = `<div class="tt-title">${d.cr}</div><div class="small" style="opacity:.75; margin-bottom:5px;">${d.cliente}</div>
+            <div class="tt-row"><span><span class="tt-key" style="background:var(--viz-planeada);"></span>Planeada</span><strong>${money(d.planeada)}</strong></div>`;
+        } else if(tipo==="real"){
+          html = `<div class="tt-title">${d.cr}</div><div class="small" style="opacity:.75; margin-bottom:5px;">${d.cliente}</div>
+            <div class="tt-row"><span><span class="tt-key" style="background:var(--viz-real);"></span>Real</span><strong>${money(d.real)}</strong></div>`;
+        } else {
+          html = `<div class="tt-title">${d.cr}</div><div class="small" style="opacity:.75; margin-bottom:5px;">${d.cliente}</div>
+            <div class="small">Todavía no se han registrado gastos reales para este folio.</div>`;
+        }
+        mostrarVizTooltip(ev, html);
+      };
+      bar.addEventListener("pointerenter", handler);
+      bar.addEventListener("focus", handler);
+      bar.addEventListener("pointerleave", ocultarVizTooltip);
+      bar.addEventListener("blur", ocultarVizTooltip);
+      bar.addEventListener("click", ()=>{ currentCR = d.cr; goto("detalle"); });
+    });
+  });
+}
+document.getElementById("filterClienteGrafico").addEventListener("change", renderGraficoUtilidad);
+document.getElementById("chkIncluirCanceladasGrafico").addEventListener("change", renderGraficoUtilidad);
+document.getElementById("btnToggleTablaUtilidad").addEventListener("click", ()=>{
+  const chartWrap = document.getElementById("chartUtilidadWrap");
+  const tablaWrap = document.getElementById("tablaUtilidadWrap");
+  const btn = document.getElementById("btnToggleTablaUtilidad");
+  const mostrandoTabla = tablaWrap.style.display !== "none";
+  tablaWrap.style.display = mostrandoTabla ? "none" : "block";
+  chartWrap.style.display = mostrandoTabla ? "block" : "none";
+  btn.textContent = mostrandoTabla ? "Ver como tabla" : "Ver como gráfico";
+});
+
+/* =========================================================================
    CONFIGURACIÓN
    ========================================================================= */
 function renderConfig(){
@@ -2904,6 +3147,7 @@ function render(){
   renderAcciones();
   renderGastos();
   renderBalance();
+  renderGraficoUtilidad();
   renderConfig();
   if(currentCR) renderDetalle();
 }
