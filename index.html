@@ -160,7 +160,12 @@
   [id$="TableWrap"]{overflow-x:auto;}
 
   /* ===== Gráficos ===== */
-  :root{ --viz-planeada:#2a78d6; --viz-real:#eb6834; --viz-grid:#e1e0d9; --viz-axis:#c3c2b7; }
+  :root{
+    --viz-planeada:#2a78d6; --viz-real:#eb6834; --viz-grid:#e1e0d9; --viz-axis:#c3c2b7;
+    --viz-cat-1:#2a78d6; --viz-cat-2:#eb6834; --viz-cat-3:#1baf7a; --viz-cat-4:#eda100;
+    --viz-cat-5:#e87ba4; --viz-cat-6:#008300; --viz-cat-7:#4a3aa7; --viz-cat-8:#e34948;
+    --viz-cat-other:#94a3b8;
+  }
   .viz-legend{display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin:2px 0 14px;}
   .viz-legend-item{display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:var(--text-600);}
   .viz-swatch{width:11px; height:11px; border-radius:2px; flex-shrink:0;}
@@ -186,6 +191,21 @@
   .viz-tooltip .tt-title{font-weight:700; margin-bottom:3px; font-family:var(--mono);}
   .viz-tooltip .tt-row{display:flex; justify-content:space-between; gap:14px;}
   .viz-tooltip .tt-key{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px;}
+
+  .viz-pie-layout{display:flex; align-items:center; gap:32px; flex-wrap:wrap;}
+  .viz-pie-svg{flex-shrink:0;}
+  .viz-pie-slice{cursor:pointer; transition:filter .1s; stroke:#fff; stroke-width:2;}
+  .viz-pie-slice:hover, .viz-pie-slice:focus-visible{filter:brightness(1.08);}
+  .viz-pie-slice.other{cursor:default;}
+  .viz-pie-label{font-size:11px; font-weight:700; fill:#fff; text-anchor:middle; dominant-baseline:central; pointer-events:none; font-family:var(--sans);}
+  .viz-pie-legend-list{flex:1; min-width:230px; display:flex; flex-direction:column; gap:9px;}
+  .viz-pie-legend-row{display:flex; align-items:center; gap:9px; font-size:12.5px; cursor:pointer; border-radius:6px; padding:3px 4px; margin:-3px -4px;}
+  .viz-pie-legend-row:hover{background:var(--blue-050);}
+  .viz-pie-legend-row.other{cursor:default;}
+  .viz-pie-legend-row.other:hover{background:transparent;}
+  .viz-pie-legend-row .name{flex:1; color:var(--text-600); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .viz-pie-legend-row .amt{font-family:var(--mono); font-weight:700; color:var(--text-900); white-space:nowrap;}
+  .viz-pie-legend-row .pct{font-family:var(--mono); color:var(--text-400); width:42px; text-align:right; flex-shrink:0;}
 
   /* ===== Responsivo ===== */
   @media (max-width: 860px){
@@ -378,6 +398,18 @@
         </div>
         <div id="chartUtilidadWrap"></div>
         <div id="tablaUtilidadWrap" style="display:none;"></div>
+      </div>
+
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:2px;">
+          <div>
+            <h3 style="margin-bottom:2px;">Monto de POs recibidas por cliente</h3>
+            <p class="small muted" style="margin:0;">Suma del valor de las CRs cuyo status ya alcanzó "PO Recibida" (venta confirmada por el cliente), sin incluir canceladas.</p>
+          </div>
+          <button class="btn btn-outline btn-sm" id="btnToggleTablaPOCliente">Ver como tabla</button>
+        </div>
+        <div id="pieClienteWrap" style="margin-top:16px;"></div>
+        <div id="tablaPOClienteWrap" style="display:none; margin-top:16px;"></div>
       </div>
     </div>
 
@@ -2038,6 +2070,137 @@ document.getElementById("btnToggleTablaUtilidad").addEventListener("click", ()=>
 });
 
 /* =========================================================================
+   GRÁFICO: PIE — MONTO DE POs RECIBIDAS POR CLIENTE
+   "PO Recibida" = la CR ya alcanzó (o superó) ese paso del status flow,
+   es decir, el cliente ya envió su orden de compra confirmando la venta.
+   ========================================================================= */
+const VIZ_PIE_COLORS = ["#2a78d6","#eb6834","#1baf7a","#eda100","#e87ba4","#008300","#4a3aa7","#e34948"];
+const VIZ_PIE_OTHER_COLOR = "#94a3b8";
+function datosPOPorCliente(){
+  const idxPO = STATUS_FLOW.findIndex(s=>s.key==="PO Recibida");
+  const porCliente = new Map();
+  state.folios.forEach(f=>{
+    if(f.status===CANCEL_KEY) return;
+    const idx = STATUS_FLOW.findIndex(s=>s.key===f.status);
+    if(idx < idxPO) return;
+    const nombre = nombreClienteFolio(f);
+    const monto = costoTotalFolio(f.cr);
+    porCliente.set(nombre, (porCliente.get(nombre)||0) + monto);
+  });
+  let lista = [...porCliente.entries()]
+    .map(([cliente,monto])=>({cliente,monto}))
+    .filter(d=>d.monto>0)
+    .sort((a,b)=>b.monto-a.monto);
+  const LIMITE = 8;
+  if(lista.length > LIMITE){
+    const top = lista.slice(0, LIMITE-1);
+    const restoMonto = lista.slice(LIMITE-1).reduce((s,d)=>s+d.monto,0);
+    lista = [...top, {cliente:"Otros clientes", monto:restoMonto, esOtros:true}];
+  }
+  return lista;
+}
+function polarToCartesian(cx, cy, r, angleDeg){
+  const a = (angleDeg-90) * Math.PI/180;
+  return { x: cx + r*Math.cos(a), y: cy + r*Math.sin(a) };
+}
+function describeArcSlice(cx, cy, r, startAngle, endAngle){
+  const start = polarToCartesian(cx, cy, r, endAngle);
+  const end = polarToCartesian(cx, cy, r, startAngle);
+  const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+  return `M ${cx} ${cy} L ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 0 ${end.x.toFixed(2)} ${end.y.toFixed(2)} Z`;
+}
+function renderPieCliente(){
+  const datos = datosPOPorCliente();
+  const wrap = document.getElementById("pieClienteWrap");
+  const tablaWrap = document.getElementById("tablaPOClienteWrap");
+  const total = datos.reduce((s,d)=>s+d.monto,0);
+
+  if(datos.length===0 || total<=0){
+    const emptyHtml = `<div class="empty-state"><div class="ic">&#127760;</div><h3>Todavía no hay POs recibidas</h3><p>Cuando una CR alcance el status "PO Recibida" aparecerá aquí.</p></div>`;
+    wrap.innerHTML = emptyHtml;
+    tablaWrap.innerHTML = emptyHtml;
+    return;
+  }
+
+  const R = 100, CX = 120, CY = 120;
+  const GAP = datos.length>1 ? 1.4 : 0; // separación angular entre rebanadas
+  let acumAngle = 0;
+  const slicesHtml = [];
+  const labelsHtml = [];
+  datos.forEach((d,i)=>{
+    const pct = d.monto/total*100;
+    const angleSpan = pct/100*360;
+    const startA = acumAngle + GAP/2;
+    const endA = acumAngle + angleSpan - GAP/2;
+    acumAngle += angleSpan;
+    const color = d.esOtros ? VIZ_PIE_OTHER_COLOR : VIZ_PIE_COLORS[i % VIZ_PIE_COLORS.length];
+    const path = endA>startA ? describeArcSlice(CX, CY, R, startA, endA) : "";
+    if(path){
+      slicesHtml.push(`<path class="viz-pie-slice${d.esOtros?' other':''}" d="${path}" fill="${color}" tabindex="0" data-idx="${i}"></path>`);
+      if(pct>=8){
+        const midA = (startA+endA)/2;
+        const lp = polarToCartesian(CX, CY, R*0.64, midA);
+        labelsHtml.push(`<text class="viz-pie-label" x="${lp.x.toFixed(2)}" y="${lp.y.toFixed(2)}">${Math.round(pct)}%</text>`);
+      }
+    }
+  });
+
+  wrap.innerHTML = `<div class="viz-pie-layout">
+    <svg class="viz-pie-svg" width="240" height="240" viewBox="0 0 240 240">
+      ${slicesHtml.join("")}
+      ${labelsHtml.join("")}
+    </svg>
+    <div class="viz-pie-legend-list">
+      <div class="small muted" style="margin-bottom:2px;">Total recibido: <strong style="color:var(--navy-900); font-family:var(--mono);">${money(total)}</strong> · ${datos.length} cliente${datos.length===1?'':'s'}</div>
+      ${datos.map((d,i)=>{
+      const pct = Math.round(d.monto/total*100);
+      const color = d.esOtros ? VIZ_PIE_OTHER_COLOR : VIZ_PIE_COLORS[i % VIZ_PIE_COLORS.length];
+      return `<div class="viz-pie-legend-row${d.esOtros?' other':''}" data-idx="${i}">
+        <span class="viz-swatch" style="background:${color};"></span>
+        <span class="name" title="${d.cliente}">${d.cliente}</span>
+        <span class="amt">${money(d.monto)}</span>
+        <span class="pct">${pct}%</span>
+      </div>`;
+    }).join("")}</div>
+  </div>`;
+
+  document.getElementById("tablaPOClienteWrap").innerHTML = `<table class="tbl"><thead><tr><th>Cliente</th><th class="right">Monto</th><th class="right">% del total</th></tr></thead><tbody>${
+    datos.map(d=>`<tr><td>${d.cliente}</td><td class="right money">${money(d.monto)}</td><td class="right mono">${Math.round(d.monto/total*100)}%</td></tr>`).join("")
+  }<tr><td><strong>Total</strong></td><td class="right money"><strong>${money(total)}</strong></td><td class="right mono">100%</td></tr></tbody></table>`;
+
+  // interacción: tooltip + navegar a Solicitudes filtradas por ese cliente
+  const irACliente = (d)=>{
+    if(d.esOtros) return;
+    goto("solicitudes");
+    const sel = document.getElementById("filterCliente");
+    sel.value = d.cliente;
+    applySolicitudesFilter();
+  };
+  const tipHtml = (d, pct)=>`<div class="tt-title">${d.cliente}</div>
+    <div class="tt-row"><span>Monto</span><strong>${money(d.monto)}</strong></div>
+    <div class="tt-row"><span>% del total</span><strong>${pct}%</strong></div>`;
+  wrap.querySelectorAll(".viz-pie-slice, .viz-pie-legend-row").forEach(el=>{
+    const d = datos[Number(el.dataset.idx)];
+    const pct = Math.round(d.monto/total*100);
+    const handler = (ev)=>mostrarVizTooltip(ev, tipHtml(d, pct));
+    el.addEventListener("pointerenter", handler);
+    el.addEventListener("focus", handler);
+    el.addEventListener("pointerleave", ocultarVizTooltip);
+    el.addEventListener("blur", ocultarVizTooltip);
+    el.addEventListener("click", ()=>irACliente(d));
+  });
+}
+document.getElementById("btnToggleTablaPOCliente").addEventListener("click", ()=>{
+  const chartWrap = document.getElementById("pieClienteWrap");
+  const tablaWrap = document.getElementById("tablaPOClienteWrap");
+  const btn = document.getElementById("btnToggleTablaPOCliente");
+  const mostrandoTabla = tablaWrap.style.display !== "none";
+  tablaWrap.style.display = mostrandoTabla ? "none" : "block";
+  chartWrap.style.display = mostrandoTabla ? "block" : "none";
+  btn.textContent = mostrandoTabla ? "Ver como tabla" : "Ver como gráfico";
+});
+
+/* =========================================================================
    CONFIGURACIÓN
    ========================================================================= */
 function renderConfig(){
@@ -3148,6 +3311,7 @@ function render(){
   renderGastos();
   renderBalance();
   renderGraficoUtilidad();
+  renderPieCliente();
   renderConfig();
   if(currentCR) renderDetalle();
 }
