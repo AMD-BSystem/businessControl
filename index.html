@@ -156,6 +156,13 @@
   .prio-media{background:#fff2cc; color:#7a5b00;}
   .prio-deseable{background:#e3e6eb; color:#4c5566;}
   .done-row{opacity:.5; text-decoration:line-through;}
+  .seg-hoy{background:#fed7aa; color:#9a3412;}
+  .seg-vencido{background:var(--danger-bg); color:var(--danger);}
+  .adjunto-row{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--gray-100);}
+  .adjunto-row:last-child{border-bottom:none;}
+  .adjunto-nombre{flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .adjunto-row .small{white-space:nowrap;}
+  .adjunto-row a.btn, .adjunto-row button.btn{width:auto; flex-shrink:0;}
 
   [id$="TableWrap"]{overflow-x:auto;}
 
@@ -658,7 +665,8 @@ const STATUS_FLOW = [
   {key:"Esperando Cotización", next:"Cotización Recibida",    hint:"Registrar cotización(es) y capturar costos"},
   {key:"Cotización Recibida",  next:"Propuesta Enviada",      hint:"Definir % de ganancia y generar propuesta (PDF)"},
   {key:"Propuesta Enviada",    next:"PO Recibida",            hint:"Esperar OC del cliente"},
-  {key:"PO Recibida",          next:"Factura Generada",       hint:"Generar factura"},
+  {key:"PO Recibida",          next:"Material Solicitado",    hint:"Solicitar/comprar el material con el proveedor"},
+  {key:"Material Solicitado",  next:"Factura Generada",       hint:"Esperar disponibilidad del material y generar factura"},
   {key:"Factura Generada",     next:"Material Entregado",     hint:"Entregar material"},
   {key:"Material Entregado",   next:"Pago Recibido",          hint:"Monitorear pago"},
   {key:"Pago Recibido",        next:"Complemento Generado",   hint:"Generar complemento de pago"},
@@ -673,6 +681,7 @@ const STATUS_COLORS = {
   "Cotización Recibida":  {bg:"#dce6f5", fg:"#1f3b73"},
   "Propuesta Enviada":    {bg:"#c9daf8", fg:"#1f3b73"},
   "PO Recibida":          {bg:"#b4c7e7", fg:"#16233f"},
+  "Material Solicitado":  {bg:"#a8b9dc", fg:"#16233f"},
   "Factura Generada":     {bg:"#9dc3e6", fg:"#16233f"},
   "Material Entregado":   {bg:"#8ea9db", fg:"#0a0f1c"},
   "Pago Recibido":        {bg:"#a9d18e", fg:"#1e4620"},
@@ -759,6 +768,7 @@ async function iniciarSesionMicrosoft(){
 async function cerrarSesionMicrosoft(){
   const account = cuentaActiva;
   cuentaActiva = null; excelFileRef = null;
+  adjuntosRootRef = null; adjuntosCRFolderCache.clear(); adjuntosCache.clear();
   document.getElementById("fileStatus").textContent = "Sin sesión de Microsoft";
   document.getElementById("fileStatus").classList.remove("connected");
   document.getElementById("btnSave").disabled = true;
@@ -1116,6 +1126,134 @@ async function guardarPOBlob(blob, filename){
 }
 
 /* =========================================================================
+   ADJUNTOS DE CR (cotizaciones y otros documentos) — se guardan en OneDrive,
+   en una subcarpeta por folio, dentro de "Adjuntos CRs" junto al Excel.
+   ========================================================================= */
+const ADJUNTOS_ROOT_NAME = "Adjuntos CRs";
+let adjuntosRootRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
+const adjuntosCRFolderCache = new Map(); // folio -> {driveId, itemId}
+const adjuntosCache = new Map(); // folio -> array de items (null mientras se carga)
+
+async function obtenerOCrearCarpetaHija(driveId, parentItemId, nombre){
+  const hijos = await listarHijosCompleto(`/drives/${driveId}/items/${parentItemId}/children`);
+  const existente = hijos.find(c=>c.folder && (c.name||"").toLowerCase()===nombre.toLowerCase());
+  if(existente) return { driveId, itemId: existente.id };
+  const res = await graphFetch(`/drives/${driveId}/items/${parentItemId}/children`, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify({ name: nombre, folder: {}, "@microsoft.graph.conflictBehavior": "rename" })
+  });
+  const creada = await res.json();
+  return { driveId, itemId: creada.id };
+}
+async function resolverCarpetaAdjuntosRoot(){
+  if(adjuntosRootRef) return adjuntosRootRef;
+  if(!excelFileRef) return null;
+  try{
+    const metaRes = await graphFetch(`/drives/${excelFileRef.driveId}/items/${excelFileRef.itemId}`);
+    const meta = await metaRes.json();
+    const parentId = meta.parentReference && meta.parentReference.id;
+    if(!parentId) return null;
+    adjuntosRootRef = await obtenerOCrearCarpetaHija(excelFileRef.driveId, parentId, ADJUNTOS_ROOT_NAME);
+    return adjuntosRootRef;
+  }catch(err){ console.warn("No se pudo resolver/crear la carpeta de Adjuntos CRs en OneDrive", err); return null; }
+}
+async function resolverCarpetaAdjuntosCR(folioCR){
+  if(adjuntosCRFolderCache.has(folioCR)) return adjuntosCRFolderCache.get(folioCR);
+  const root = await resolverCarpetaAdjuntosRoot();
+  if(!root) return null;
+  try{
+    const ref = await obtenerOCrearCarpetaHija(root.driveId, root.itemId, folioCR);
+    adjuntosCRFolderCache.set(folioCR, ref);
+    return ref;
+  }catch(err){ console.warn("No se pudo resolver/crear la subcarpeta de adjuntos para "+folioCR, err); return null; }
+}
+async function listarAdjuntosCR(folioCR){
+  const ref = await resolverCarpetaAdjuntosCR(folioCR);
+  if(!ref) return [];
+  const hijos = await listarHijosCompleto(`/drives/${ref.driveId}/items/${ref.itemId}/children`);
+  return hijos.filter(it=>it.file).map(it=>({
+    id: it.id, driveId: ref.driveId, name: it.name, size: it.size,
+    webUrl: it.webUrl, lastModifiedDateTime: it.lastModifiedDateTime
+  })).sort((a,b)=> (b.lastModifiedDateTime||"").localeCompare(a.lastModifiedDateTime||""));
+}
+async function subirAdjuntosCR(folioCR, files){
+  const ref = await resolverCarpetaAdjuntosCR(folioCR);
+  if(!ref){ showToast("No se pudo preparar la carpeta de adjuntos en OneDrive (revisa tu sesión de Microsoft)", true); return false; }
+  const token = await obtenerTokenGraph();
+  let ok = 0, fallos = 0;
+  for(const file of files){
+    try{
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(file.name)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type": file.type || "application/octet-stream" },
+        body: file
+      });
+      if(res.ok) ok++; else fallos++;
+    }catch(err){ console.error(err); fallos++; }
+  }
+  if(ok) showToast(ok+" documento(s) subido(s) a OneDrive ("+ADJUNTOS_ROOT_NAME+"/"+folioCR+")");
+  if(fallos) showToast(fallos+" documento(s) no se pudieron subir", true);
+  return ok>0;
+}
+async function eliminarAdjuntoCR(folioCR, item){
+  try{
+    await graphFetch(`/drives/${item.driveId}/items/${item.id}`, { method: "DELETE" });
+    showToast("Documento eliminado: "+item.name);
+    return true;
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo eliminar el documento", true);
+    return false;
+  }
+}
+async function cargarYRenderAdjuntos(folioCR){
+  const wrap = document.getElementById("adjuntosListWrap");
+  if(!wrap) return;
+  if(!cuentaActiva){ wrap.innerHTML = ""; return; }
+  if(adjuntosCache.has(folioCR)){
+    renderListaAdjuntos(folioCR, adjuntosCache.get(folioCR));
+    return;
+  }
+  wrap.innerHTML = `<p class="small muted">Cargando documentos...</p>`;
+  try{
+    const items = await listarAdjuntosCR(folioCR);
+    adjuntosCache.set(folioCR, items);
+    if(currentCR===folioCR) renderListaAdjuntos(folioCR, items);
+  }catch(err){
+    console.error(err);
+    if(currentCR===folioCR) wrap.innerHTML = `<p class="small muted">No se pudieron cargar los documentos de OneDrive.</p>`;
+  }
+}
+function renderListaAdjuntos(folioCR, items){
+  const wrap = document.getElementById("adjuntosListWrap");
+  if(!wrap) return;
+  if(!items || items.length===0){
+    wrap.innerHTML = `<p class="small muted">Todavía no hay documentos adjuntos a esta CR.</p>`;
+  } else {
+    wrap.innerHTML = items.map(item=>{
+      const sizeKb = item.size ? (item.size/1024).toFixed(0)+" KB" : "";
+      const fecha = item.lastModifiedDateTime ? fmtDate(item.lastModifiedDateTime.slice(0,10)) : "";
+      return `<div class="adjunto-row" data-adjid="${item.id}">
+        <span class="adjunto-nombre">&#128196; ${item.name}</span>
+        <span class="small muted">${sizeKb}${fecha?(" &middot; "+fecha):""}</span>
+        <a href="${item.webUrl||"#"}" target="_blank" class="btn btn-outline btn-sm">Abrir</a>
+        <button class="btn btn-outline btn-sm" data-elimadjunto="${item.id}">&times;</button>
+      </div>`;
+    }).join("");
+  }
+  wrap.querySelectorAll("[data-elimadjunto]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const item = (adjuntosCache.get(folioCR)||[]).find(i=>i.id===btn.dataset.elimadjunto);
+      if(!item) return;
+      if(!confirm('¿Eliminar "'+item.name+'" de OneDrive? Esta acción no se puede deshacer.')) return;
+      const ok = await eliminarAdjuntoCR(folioCR, item);
+      if(ok){ adjuntosCache.delete(folioCR); cargarYRenderAdjuntos(folioCR); }
+    });
+  });
+}
+
+/* =========================================================================
    HELPERS
    ========================================================================= */
 function N(v){ const n = parseFloat(v); return isNaN(n) ? 0 : n; }
@@ -1186,6 +1324,9 @@ function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return round2((c
 function precioFinalRenglon(d){ const cant = N(d.cantidad)||1; return round2(precioUnitarioFinal(d) * cant); }
 function utilidadRenglon(d){ return round2(precioFinalRenglon(d) - costoTotalRenglon(d)); }
 function costoTotalFolio(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0)); }
+// Lo que el cliente realmente paga: el subtotal cotizado + 16% de IVA (mismo cálculo que la propuesta en PDF).
+// El pago capturado al marcar "Pago Recibido" debe usar SIEMPRE este total, no el subtotal sin IVA.
+function costoTotalFolioConIVA(cr){ return round2(costoTotalFolio(cr) * 1.16); }
 function gastosDeCR(cr){ return state.gastos.filter(g=>g.crAsignada===cr); }
 function gastosAsignadosTotal(cr){ return gastosDeCR(cr).reduce((s,g)=>s+N(g.costoTotal),0); }
 // Utilidad PLANEADA: la estimada al cotizar, con los costos capturados en cada renglón (no se mueve con los gastos reales).
@@ -1331,6 +1472,15 @@ function primeraDescripcionCR(cr){
   const ordenado = [...dets].sort((a,b)=>a.noRenglon-b.noRenglon);
   return ordenado[0].descripcion || "";
 }
+function seguimientoHtml(f){
+  if(!f.fechaSeguimiento) return `<span class="muted">-</span>`;
+  const hoy = todayISO();
+  let cls = "";
+  if(f.fechaSeguimiento === hoy) cls = " seg-hoy";
+  else if(f.fechaSeguimiento < hoy) cls = " seg-vencido";
+  const nota = (f.notaSeguimiento||"").replace(/"/g,"&quot;");
+  return `<span class="badge${cls}" ${nota?`title="${nota}"`:""}>${fmtDate(f.fechaSeguimiento)}</span>`;
+}
 function tablaFolios(list){
   if(list.length===0){
     return `<div class="empty-state"><div class="ic">&#128193;</div><h3>Todavía no hay solicitudes</h3><p>Da clic en "Nueva solicitud" para registrar la primera, o carga tu Excel existente.</p></div>`;
@@ -1343,7 +1493,7 @@ function tablaFolios(list){
     const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
       <td class="cr-code">${f.cr}</td>
-      <td>${fmtDate(f.fechaSolicitud)}</td>
+      <td>${seguimientoHtml(f)}</td>
       <td>${cli ? cli.empresa : "<span class='muted'>(sin cliente)</span>"}</td>
       <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
       <td>${badgeHtml(f.status)}</td>
@@ -1354,7 +1504,7 @@ function tablaFolios(list){
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Seguimiento</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -2526,13 +2676,17 @@ function renderDetalle(){
         <button class="btn btn-outline" id="btnWhatsapp">Enviar por WhatsApp</button>
       </div>`;
   } else if(folio.status==="PO Recibida"){
+    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material solicitado/comprado &rarr; Material Solicitado</button>
+                     <p class="small muted" style="margin-top:8px;">Monto a facturar al cliente (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+  } else if(folio.status==="Material Solicitado"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura generada &rarr; Factura Generada</button>
-                     <p class="small muted" style="margin-top:8px;">Siguiente paso una vez generada: <strong>Entregar material</strong>.</p>`;
+                     <p class="small muted" style="margin-top:8px;">Esperando disponibilidad del material con el proveedor. Monto a facturar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Factura Generada"){
-    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material entregado &rarr; Material Entregado</button>`;
+    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material entregado &rarr; Material Entregado</button>
+                     <p class="small muted" style="margin-top:8px;">Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Material Entregado"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar pago recibido &rarr; Pago Recibido</button>
-                     <p class="small muted" style="margin-top:8px;">Fecha probable de pago: <strong>${fpp?fmtDate(fpp):"captura la fecha de factura para calcularla"}</strong> (según días de crédito del cliente).</p>`;
+                     <p class="small muted" style="margin-top:8px;">Fecha probable de pago: <strong>${fpp?fmtDate(fpp):"captura la fecha de factura para calcularla"}</strong> (según días de crédito del cliente).<br>Monto a cobrar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Pago Recibido"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar complemento generado &rarr; Complemento Generado</button>`;
   } else if(folio.status==="Complemento Generado"){
@@ -2556,7 +2710,10 @@ function renderDetalle(){
         <p class="page-sub">${cli?cli.empresa:"(sin cliente)"} &middot; Solicitado el ${fmtDate(folio.fechaSolicitud)}</p>
         ${mostrarOCPersistente ? `<p class="small" style="margin:6px 0 0; display:flex; align-items:center; gap:6px;"><span class="muted">No. de OC del cliente:</span> <input id="inpOCPersistente" value="${folio.noOC||""}" style="width:auto; max-width:180px; padding:3px 8px; font-size:12.5px;"></p>` : ""}
       </div>
-      <div>${badgeHtml(folio.status)}</div>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+        ${badgeHtml(folio.status)}
+        <button class="btn btn-outline btn-sm" id="btnImprimirCaja">&#128230; Imprimir identificación de caja</button>
+      </div>
     </div>
 
     ${folio.status===CANCEL_KEY ? `<div class="cancel-banner"><strong>Solicitud cancelada</strong>${folio.motivoCancelacion} &middot; ${fmtDate(folio.fechaCancelacion)}</div>` : renderStepperConFechas(folio)}
@@ -2570,6 +2727,18 @@ function renderDetalle(){
         <div style="display:flex; gap:8px; align-items:center;">${regresarBtn}${cancelBtn}</div>
       </div>
       <div style="margin-top:14px;">${accionesHtml}</div>
+    </div>
+
+    <div class="card">
+      <div class="flex-between">
+        <h3>Cotizaciones y documentos adjuntos</h3>
+        <div>
+          <input type="file" id="inpAdjuntoFile" multiple style="display:none;">
+          <button class="btn btn-outline btn-sm" id="btnAdjuntarDoc" ${cuentaActiva?"":"disabled title=\"Inicia sesión con Microsoft para adjuntar documentos\""}>+ Adjuntar documento</button>
+        </div>
+      </div>
+      <p class="small muted" style="margin:6px 0 10px;">${cuentaActiva ? "Se guardan en OneDrive, en una subcarpeta dedicada a esta CR (\""+ADJUNTOS_ROOT_NAME+"/"+folio.cr+"\") para acceso rápido." : "Inicia sesión con Microsoft (arriba) para adjuntar y ver documentos de esta CR."}</p>
+      <div id="adjuntosListWrap">${cuentaActiva ? "" : ""}</div>
     </div>
 
     <div class="card">
@@ -2666,6 +2835,15 @@ function renderDetalle(){
     </div>`}
 
     <div class="card">
+      <h3>Seguimiento</h3>
+      <p class="small muted" style="margin:0 0 10px;">Marca cuándo hay que retomar esta CR — aparecerá resaltada en la lista de Solicitudes ese día (naranja) o si ya se pasó la fecha (rojo).</p>
+      <div class="grid-2">
+        <div class="field"><label>Fecha de seguimiento</label><input type="date" data-fechaseg value="${folio.fechaSeguimiento||""}"></div>
+      </div>
+      <div class="field"><label>¿Qué se debe hacer?</label><textarea data-notaseg placeholder="Ej. Llamar al cliente para confirmar la entrega">${folio.notaSeguimiento||""}</textarea></div>
+    </div>
+
+    <div class="card">
       <h3>Fechas de trazabilidad (ajuste manual si es necesario)</h3>
       <div class="grid-3">${fechasEditables || '<p class="small muted">Aún no hay fechas registradas.</p>'}</div>
       <div class="field"><label>Notas generales</label><textarea data-notasgen>${folio.notasGenerales}</textarea></div>
@@ -2737,6 +2915,10 @@ function renderDetalle(){
   });
   const notasGenEl = cont.querySelector("[data-notasgen]");
   if(notasGenEl) notasGenEl.addEventListener("change", ()=>{ folio.notasGenerales = notasGenEl.value; markDirty(); });
+  const fechaSegEl = cont.querySelector("[data-fechaseg]");
+  if(fechaSegEl) fechaSegEl.addEventListener("change", ()=>{ folio.fechaSeguimiento = fechaSegEl.value; markDirty(); renderSolicitudes(); renderDashboard(); });
+  const notaSegEl = cont.querySelector("[data-notaseg]");
+  if(notaSegEl) notaSegEl.addEventListener("change", ()=>{ folio.notaSeguimiento = notaSegEl.value; markDirty(); });
 
   const btnCancelarFolio = document.getElementById("btnCancelarFolio");
   if(btnCancelarFolio) btnCancelarFolio.addEventListener("click", ()=>abrirModalCancelar(folio));
@@ -2770,7 +2952,7 @@ function renderDetalle(){
         if(folio.status==="Pago Recibido" && !state.ingresos.some(i=>i.cr===folio.cr)){
           state.ingresos.push({
             id: uid("IN"), cr: folio.cr, fecha: folio.fechas[folio.status],
-            concepto: "Pago recibido - "+folio.cr, monto: costoTotalFolio(folio.cr)
+            concepto: "Pago recibido - "+folio.cr, monto: costoTotalFolioConIVA(folio.cr)
           });
         }
         markDirty(); renderDetalle(); renderBalance();
@@ -2809,6 +2991,26 @@ function renderDetalle(){
       if(g){ g.crAsignada = ""; markDirty(); render(); showToast("Gasto desasignado de esta CR (sigue en Gastos)"); }
     });
   });
+  const btnImprimirCaja = document.getElementById("btnImprimirCaja");
+  if(btnImprimirCaja) btnImprimirCaja.addEventListener("click", ()=>imprimirIdentificacionCaja(folio, cli, dets));
+  const btnAdjuntarDoc = document.getElementById("btnAdjuntarDoc");
+  const inpAdjuntoFile = document.getElementById("inpAdjuntoFile");
+  if(btnAdjuntarDoc && inpAdjuntoFile){
+    btnAdjuntarDoc.addEventListener("click", ()=>inpAdjuntoFile.click());
+    inpAdjuntoFile.addEventListener("change", async ()=>{
+      const files = Array.from(inpAdjuntoFile.files||[]);
+      if(files.length===0) return;
+      btnAdjuntarDoc.disabled = true;
+      btnAdjuntarDoc.textContent = "Subiendo...";
+      await subirAdjuntosCR(folio.cr, files);
+      adjuntosCache.delete(folio.cr);
+      inpAdjuntoFile.value = "";
+      btnAdjuntarDoc.disabled = false;
+      btnAdjuntarDoc.textContent = "+ Adjuntar documento";
+      cargarYRenderAdjuntos(folio.cr);
+    });
+  }
+  cargarYRenderAdjuntos(folio.cr);
   const btnGenerarPO = document.getElementById("btnGenerarPO");
   if(btnGenerarPO) btnGenerarPO.addEventListener("click", ()=>abrirModalPO(folio));
   cont.querySelectorAll("[data-regenerarpo]").forEach(btn=>{
@@ -3150,63 +3352,98 @@ function abrirModalPO(folio){
   const dets = detallesDe(folio.cr);
   const proveedoresOrdenados = [...state.proveedores].sort((a,b)=>a.nombreComercial.localeCompare(b.nombreComercial));
   const tiempoSugerido = dets.length ? tiempoEntregaTexto(dets[0]) : "";
-  document.getElementById("formPO").innerHTML = `
-    <div class="field"><label>Proveedor</label>
-      <select id="po_proveedor"><option value="">Selecciona...</option>${proveedoresOrdenados.map(p=>`<option value="${p.id}">${p.nombreComercial}</option>`).join("")}</select>
-    </div>
-    <div class="field"><label>Renglones a incluir en esta PO</label>
-      ${dets.map(d=>`
-        <label class="checkbox-row" style="margin-bottom:8px; align-items:flex-start;">
-          <input type="checkbox" data-poitem="${d.noRenglon}" checked style="margin-top:2px;">
-          <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))} MXN/pza${d.costoArticuloUSD?(" ("+money(N(d.costoArticuloUSD))+" USD/pza)"):""}</span>
-        </label>`).join("")}
-    </div>
-    <div class="field"><label>Moneda a mostrar en la PO</label>
-      <select id="po_moneda">
-        <option value="MXN">Pesos (MXN)</option>
-        <option value="USD">Dólares (USD)</option>
+  const existentes = posDeCR(folio.cr);
+
+  const selectorHtml = existentes.length ? `
+    <div class="field"><label>¿Nueva PO o editar/reescribir una ya generada?</label>
+      <select id="po_modo">
+        <option value="">+ Nueva PO</option>
+        ${existentes.map(p=>{
+          const prov = proveedorById(p.idProveedor);
+          return `<option value="${p.folio}">Editar ${p.folio} — ${prov?prov.nombreComercial:"(proveedor eliminado)"} — ${fmtDate(p.fecha)}</option>`;
+        }).join("")}
       </select>
-      <span class="hint">Si un renglón no tiene costo en USD capturado, se calcula con el tipo de cambio de esta CR.</span>
-    </div>
-    <div class="grid-2">
-      <div class="field"><label>Forma de pago</label><input id="po_formapago" value="${state.config.formaPago||""}"></div>
-      <div class="field"><label>Tiempo de entrega</label><input id="po_tiempoentrega" value="${tiempoSugerido}"></div>
-    </div>
-    <div class="grid-2">
-      <div class="field"><label>Condición de entrega</label><input id="po_condicionentrega" value="${state.config.condicionEntrega||""}"></div>
-      <div class="field"><label>% IVA</label><input type="number" step="0.01" id="po_iva" value="16"></div>
-    </div>
-    <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas"></textarea></div>
-    <div class="flex-between">
-      <button class="btn btn-outline" id="po_cancel">Cancelar</button>
-      <button class="btn btn-primary" id="po_save">Generar PO y PDF</button>
-    </div>
-  `;
-  document.getElementById("po_cancel").addEventListener("click", cerrarModales);
-  document.getElementById("po_save").addEventListener("click", async ()=>{
-    const idProveedor = document.getElementById("po_proveedor").value;
-    if(!idProveedor){ showToast("Selecciona el proveedor", true); return; }
-    const seleccionados = Array.from(document.querySelectorAll("[data-poitem]:checked")).map(chk=>N(chk.dataset.poitem));
-    if(seleccionados.length===0){ showToast("Selecciona al menos un renglón", true); return; }
-    const items = dets.filter(d=>seleccionados.includes(d.noRenglon)).map(d=>({
-      descripcion: d.descripcion, numeroParte: d.numeroParte, cantidad: N(d.cantidad)||1,
-      costoUnitarioMXN: N(d.costoArticulo),
-      costoUnitarioUSD: d.costoArticuloUSD ? N(d.costoArticuloUSD) : round2(N(d.costoArticulo)/(N(folio.tipoCambio)||18)),
-      entrega: tiempoEntregaTexto(d)
-    }));
-    const po = {
-      folio: nextPOFolio(), cr: folio.cr, idProveedor, fecha: todayISO(),
-      moneda: document.getElementById("po_moneda").value,
-      formaPago: document.getElementById("po_formapago").value.trim(),
-      tiempoEntrega: document.getElementById("po_tiempoentrega").value.trim(),
-      condicionEntrega: document.getElementById("po_condicionentrega").value.trim(),
-      ivaPct: N(document.getElementById("po_iva").value),
-      items, notas: document.getElementById("po_notas").value.trim()
-    };
-    state.pos.push(po);
-    cerrarModales(); markDirty();
-    await generarPOPDF(po, proveedorById(idProveedor), folio);
-    renderDetalle();
+    </div>` : "";
+  document.getElementById("formPO").innerHTML = selectorHtml + `<div id="po_formBody"></div>`;
+
+  function pintarCuerpoPO(poExistente){
+    const itemSeleccionado = (d) => poExistente
+      ? poExistente.items.some(it=>it.descripcion===d.descripcion && (it.numeroParte||"")===(d.numeroParte||""))
+      : true;
+    document.getElementById("po_formBody").innerHTML = `
+      <div class="field"><label>Proveedor</label>
+        <select id="po_proveedor"><option value="">Selecciona...</option>${proveedoresOrdenados.map(p=>`<option value="${p.id}" ${poExistente&&poExistente.idProveedor===p.id?"selected":""}>${p.nombreComercial}</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>Renglones a incluir en esta PO</label>
+        ${dets.map(d=>`
+          <label class="checkbox-row" style="margin-bottom:8px; align-items:flex-start;">
+            <input type="checkbox" data-poitem="${d.noRenglon}" ${itemSeleccionado(d)?"checked":""} style="margin-top:2px;">
+            <span>Renglón ${d.noRenglon} — ${d.descripcion}${d.numeroParte?(" ("+d.numeroParte+")"):""} · x${d.cantidad} · costo ${money(N(d.costoArticulo))} MXN/pza${d.costoArticuloUSD?(" ("+money(N(d.costoArticuloUSD))+" USD/pza)"):""}</span>
+          </label>`).join("")}
+      </div>
+      <div class="field"><label>Moneda a mostrar en la PO</label>
+        <select id="po_moneda">
+          <option value="MXN" ${(!poExistente||poExistente.moneda==="MXN")?"selected":""}>Pesos (MXN)</option>
+          <option value="USD" ${poExistente&&poExistente.moneda==="USD"?"selected":""}>Dólares (USD)</option>
+        </select>
+        <span class="hint">Si un renglón no tiene costo en USD capturado, se calcula con el tipo de cambio de esta CR.</span>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Forma de pago</label><input id="po_formapago" value="${poExistente?(poExistente.formaPago||""):(state.config.formaPago||"")}"></div>
+        <div class="field"><label>Tiempo de entrega</label><input id="po_tiempoentrega" value="${poExistente?(poExistente.tiempoEntrega||""):tiempoSugerido}"></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Condición de entrega</label><input id="po_condicionentrega" value="${poExistente?(poExistente.condicionEntrega||""):(state.config.condicionEntrega||"")}"></div>
+        <div class="field"><label>% IVA</label><input type="number" step="0.01" id="po_iva" value="${(poExistente&&poExistente.ivaPct!==undefined&&poExistente.ivaPct!==null&&poExistente.ivaPct!=="")?poExistente.ivaPct:16}"></div>
+      </div>
+      <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas">${poExistente?(poExistente.notas||""):""}</textarea></div>
+      <div class="flex-between">
+        <button class="btn btn-outline" id="po_cancel">Cancelar</button>
+        <button class="btn btn-primary" id="po_save">${poExistente?("Guardar cambios en "+poExistente.folio+" y regenerar PDF"):"Generar PO y PDF"}</button>
+      </div>
+    `;
+    document.getElementById("po_cancel").addEventListener("click", cerrarModales);
+    document.getElementById("po_save").addEventListener("click", async ()=>{
+      const idProveedor = document.getElementById("po_proveedor").value;
+      if(!idProveedor){ showToast("Selecciona el proveedor", true); return; }
+      const seleccionados = Array.from(document.querySelectorAll("[data-poitem]:checked")).map(chk=>N(chk.dataset.poitem));
+      if(seleccionados.length===0){ showToast("Selecciona al menos un renglón", true); return; }
+      const items = dets.filter(d=>seleccionados.includes(d.noRenglon)).map(d=>({
+        descripcion: d.descripcion, numeroParte: d.numeroParte, cantidad: N(d.cantidad)||1,
+        costoUnitarioMXN: N(d.costoArticulo),
+        costoUnitarioUSD: d.costoArticuloUSD ? N(d.costoArticuloUSD) : round2(N(d.costoArticulo)/(N(folio.tipoCambio)||18)),
+        entrega: tiempoEntregaTexto(d)
+      }));
+      const datosPO = {
+        idProveedor,
+        moneda: document.getElementById("po_moneda").value,
+        formaPago: document.getElementById("po_formapago").value.trim(),
+        tiempoEntrega: document.getElementById("po_tiempoentrega").value.trim(),
+        condicionEntrega: document.getElementById("po_condicionentrega").value.trim(),
+        ivaPct: N(document.getElementById("po_iva").value),
+        items, notas: document.getElementById("po_notas").value.trim()
+      };
+      let po;
+      if(poExistente){
+        Object.assign(poExistente, datosPO);
+        poExistente.fecha = todayISO();
+        po = poExistente;
+      } else {
+        po = { folio: nextPOFolio(), cr: folio.cr, fecha: todayISO(), ...datosPO };
+        state.pos.push(po);
+      }
+      cerrarModales(); markDirty();
+      await generarPOPDF(po, proveedorById(idProveedor), folio);
+      renderDetalle();
+      showToast(poExistente ? ("PO "+po.folio+" actualizada") : ("PO "+po.folio+" generada"));
+    });
+  }
+
+  pintarCuerpoPO(null);
+  const selModo = document.getElementById("po_modo");
+  if(selModo) selModo.addEventListener("change", ()=>{
+    const poSel = existentes.find(p=>p.folio===selModo.value) || null;
+    pintarCuerpoPO(poSel);
   });
   document.getElementById("modalPO").classList.add("active");
 }
@@ -3286,6 +3523,80 @@ function enviarWhatsapp(folio, cli){
   if(!link){ showToast("Agrega un teléfono de contacto para enviar por WhatsApp", true); return; }
   window.open(link, "_blank");
   showToast("Se abrió WhatsApp con el mensaje listo (confírmalo y adjunta el PDF a mano).");
+}
+
+/* =========================================================================
+   IDENTIFICACIÓN DE CAJA — hoja para pegar afuera de la caja: logo, folio,
+   cliente/atención, PO del cliente y lista de materiales. Se manda directo
+   a imprimir (no genera un PDF para guardar).
+   ========================================================================= */
+function construirHtmlCaja(folio, cli, dets){
+  const filas = dets.map((d,i)=>`
+    <tr>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; text-align:center;">${i+1}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb;">${d.descripcion||""}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; font-family:'Courier New',monospace;">${d.numeroParte||"-"}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; text-align:center; font-weight:700;">${d.cantidad||1}</td>
+    </tr>`).join("");
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Identificación de caja ${folio.cr}</title>
+<style>
+  @page { size: letter; margin: 0.45in; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI', Arial, sans-serif; color:#1f2937; }
+  .box { border:3px solid #0b2545; border-radius:16px; padding:26px; }
+  .hdr { display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid #0b2545; padding-bottom:16px; margin-bottom:18px; }
+  .hdr img { max-height:72px; max-width:280px; }
+  .hdr-right { text-align:right; }
+  .hdr-lbl { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#64748b; font-weight:700; }
+  .folio { font-size:38px; font-weight:800; color:#0b2545; font-family:'Courier New',monospace; line-height:1.1; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; }
+  .cell { background:#f8fafc; border:1px solid #dbe3ef; border-radius:10px; padding:11px 15px; }
+  .cell.full { grid-column:1/3; }
+  .cell .k { font-size:10.5px; text-transform:uppercase; color:#64748b; font-weight:700; letter-spacing:.05em; }
+  .cell .v { font-size:18px; font-weight:700; color:#0b2545; margin-top:3px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  thead th { background:#0f172a; color:#fff; padding:9px 8px; text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  .foot { margin-top:18px; font-size:10px; color:#94a3b8; text-align:right; }
+  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="hdr">
+      ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services">`:`<div style="font-weight:800; font-size:20px; color:#0b2545;">AMD Business Services</div>`}
+      <div class="hdr-right">
+        <div class="hdr-lbl">Identificación de caja</div>
+        <div class="folio">${folio.cr}</div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="cell"><div class="k">Cliente</div><div class="v">${cli?cli.empresa:"-"}</div></div>
+      <div class="cell"><div class="k">Atención de</div><div class="v">${folio.contacto||"-"}</div></div>
+      <div class="cell full"><div class="k">PO / OC del cliente</div><div class="v">${folio.noOC||"Pendiente"}</div></div>
+    </div>
+    <table>
+      <thead><tr><th style="text-align:center;">#</th><th>Descripción</th><th>No. de parte</th><th style="text-align:center;">Cant.</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table>
+    <div class="foot">Impreso el ${fmtDate(todayISO())} &middot; AMD Business Services</div>
+  </div>
+</body>
+</html>`;
+}
+function imprimirIdentificacionCaja(folio, cli, dets){
+  if(!dets || dets.length===0){ showToast("Esta CR no tiene renglones capturados todavía", true); return; }
+  const html = construirHtmlCaja(folio, cli, dets);
+  const w = window.open("", "_blank", "width=900,height=1150");
+  if(!w){ showToast("El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para este sitio.", true); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ try{ w.print(); }catch(err){ console.error(err); } }, 300);
 }
 
 /* =========================================================================
@@ -3390,6 +3701,7 @@ function importarWorkbook(wb){
         idCliente:String(col(r,map,"ID_Cliente")),
         contacto:col(r,map,"Nombre Contacto"), correoContacto:col(r,map,"Correo Contacto"), telContacto:col(r,map,"Teléfono Contacto"),
         status, noOC:col(r,map,"No. OC Cliente"), notasGenerales:col(r,map,"Notas Generales"),
+        fechaSeguimiento: excelSerialToISO(col(r,map,"Fecha Seguimiento")), notaSeguimiento: col(r,map,"Nota Seguimiento"),
         cancelada:(status===CANCEL_KEY),
         motivoCancelacion:col(r,map,"Motivo Cancelación"), fechaCancelacion:excelSerialToISO(col(r,map,"Fecha Cancelación")),
         tipoCambio: (col(r,map,"Tipo de Cambio USD")!=="") ? N(col(r,map,"Tipo de Cambio USD")) : 18,
@@ -3401,6 +3713,7 @@ function importarWorkbook(wb){
       folio.fechas["Cotización Recibida"] = excelSerialToISO(col(r,map,"Fecha Cotización Recibida"));
       folio.fechas["Propuesta Enviada"] = excelSerialToISO(col(r,map,"Fecha Propuesta Enviada"));
       folio.fechas["PO Recibida"] = excelSerialToISO(col(r,map,"Fecha OC Recibida"));
+      folio.fechas["Material Solicitado"] = excelSerialToISO(col(r,map,"Fecha Material Solicitado"));
       folio.fechas["Factura Generada"] = excelSerialToISO(col(r,map,"Fecha Factura Generada"));
       folio.fechas["Material Entregado"] = excelSerialToISO(col(r,map,"Fecha Material Entregado"));
       folio.fechas["Pago Recibido"] = excelSerialToISO(col(r,map,"Fecha Pago Recibido"));
@@ -3586,21 +3899,21 @@ document.getElementById("btnSave").addEventListener("click", async ()=>{
 });
 
 const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
-  "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
-  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Factura Generada","Días de Crédito",
+  "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Total Final con IVA","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
+  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Días de Crédito",
   "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
-  "Fecha Finalizada","Notas Generales","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
+  "Fecha Finalizada","Notas Generales","Fecha Seguimiento","Nota Seguimiento","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
 function filaFolioExcel(f){
   ensureFechas(f);
   const cli = clienteById(f.idCliente);
   const fpp = fechaProbablePago(f);
   return [f.cr, f.fechaSolicitud, f.idCliente, cli?cli.empresa:"", f.contacto, f.correoContacto, f.telContacto,
-    f.status, siguientePasoDe(f), costoTotalFolio(f.cr), utilidadFolioPlaneada(f.cr),
+    f.status, siguientePasoDe(f), costoTotalFolio(f.cr), costoTotalFolioConIVA(f.cr), utilidadFolioPlaneada(f.cr),
     tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
     f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
-    f.noOC, f.fechas["PO Recibida"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
+    f.noOC, f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
     f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
-    f.fechas["Finalizada"], f.notasGenerales, f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
+    f.fechas["Finalizada"], f.notasGenerales, f.fechaSeguimiento||"", f.notaSeguimiento||"", f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
 }
 const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
   "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
