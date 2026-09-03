@@ -141,6 +141,16 @@
   .search-row{display:flex; gap:10px; margin-bottom:16px; align-items:center;}
   .search-row input{flex:1; padding:9px 12px; border:1px solid var(--gray-200); border-radius:7px;}
   .search-row select{width:auto; padding:9px 12px; border:1px solid var(--gray-200); border-radius:7px;}
+  .multiselect{position:relative; flex-shrink:0;}
+  .multiselect-btn{width:auto; white-space:nowrap; padding:9px 12px; font-size:13.5px; display:flex; align-items:center; gap:6px;}
+  .multiselect-btn .car{font-size:10px; opacity:.7;}
+  .multiselect-panel{position:absolute; top:calc(100% + 4px); left:0; z-index:30; background:#fff; border:1px solid var(--gray-200); border-radius:8px; box-shadow:0 10px 28px rgba(4,22,41,.14); padding:8px; min-width:230px; max-height:320px; overflow-y:auto;}
+  .multiselect-panel .msi{display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; font-size:13px; cursor:pointer;}
+  .multiselect-panel .msi:hover{background:var(--gray-050);}
+  .multiselect-panel .msi input{flex:0 0 14px; width:14px; height:14px;}
+  .multiselect-panel .msi-actions{display:flex; justify-content:space-between; padding:4px 6px 8px; margin-bottom:4px; border-bottom:1px solid var(--gray-100);}
+  .multiselect-panel .msi-actions a{font-size:11.5px; color:var(--blue-600); text-decoration:none; cursor:pointer;}
+  .multiselect-panel .msi-actions a:hover{text-decoration:underline;}
   .toast{position:fixed; bottom:22px; right:22px; background:var(--navy-950); color:#fff; padding:12px 18px; border-radius:8px; font-size:13px; box-shadow:0 8px 24px rgba(0,0,0,.25); z-index:99; display:none; align-items:center; gap:8px;}
   .toast.show{display:flex;}
   .toast.err{background:var(--danger);}
@@ -295,7 +305,10 @@
       <div class="search-row">
         <input type="text" id="searchCR" placeholder="Buscar por folio, cliente, descripción o número de parte...">
         <select id="filterCliente"><option value="">Todos los clientes</option></select>
-        <select id="filterStatus"><option value="">Todos los status</option></select>
+        <div class="multiselect" id="filterStatusWrap">
+          <button type="button" class="btn btn-outline multiselect-btn" id="filterStatusBtn">Todos los status <span class="car">&#9662;</span></button>
+          <div class="multiselect-panel" id="filterStatusPanel" hidden></div>
+        </div>
         <button class="btn btn-outline" id="btnExportarSolicitudes">Exportar a Excel</button>
       </div>
       <div class="card" style="padding:0;">
@@ -667,7 +680,8 @@ const STATUS_FLOW = [
   {key:"Propuesta Enviada",    next:"PO Recibida",            hint:"Esperar OC del cliente"},
   {key:"PO Recibida",          next:"Material Solicitado",    hint:"Solicitar/comprar el material con el proveedor"},
   {key:"Material Solicitado",  next:"Factura Generada",       hint:"Esperar disponibilidad del material y generar factura"},
-  {key:"Factura Generada",     next:"Material Entregado",     hint:"Entregar material"},
+  {key:"Factura Generada",     next:"Factura Enviada",        hint:"Enviar la factura al cliente por correo"},
+  {key:"Factura Enviada",      next:"Material Entregado",     hint:"Entregar material"},
   {key:"Material Entregado",   next:"Pago Recibido",          hint:"Monitorear pago"},
   {key:"Pago Recibido",        next:"Complemento Generado",   hint:"Generar complemento de pago"},
   {key:"Complemento Generado", next:"Finalizada",             hint:"Cerrar / archivar folio"},
@@ -683,6 +697,7 @@ const STATUS_COLORS = {
   "PO Recibida":          {bg:"#b4c7e7", fg:"#16233f"},
   "Material Solicitado":  {bg:"#a8b9dc", fg:"#16233f"},
   "Factura Generada":     {bg:"#9dc3e6", fg:"#16233f"},
+  "Factura Enviada":      {bg:"#96bce3", fg:"#0f1f38"},
   "Material Entregado":   {bg:"#8ea9db", fg:"#0a0f1c"},
   "Pago Recibido":        {bg:"#a9d18e", fg:"#1e4620"},
   "Complemento Generado": {bg:"#d9d9d9", fg:"#333333"},
@@ -1258,9 +1273,12 @@ function renderListaAdjuntos(folioCR, items){
    ========================================================================= */
 function N(v){ const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function money(v){ return "$" + N(v).toLocaleString("es-MX",{minimumFractionDigits:2, maximumFractionDigits:2}); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+// OJO: se usa la fecha/hora LOCAL (no toISOString(), que es UTC) para evitar que,
+// en horas de la tarde/noche en México (UTC-6), la fecha capturada se recorra un día.
+function dateToISOLocal(d){ const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,"0"); const dd=String(d.getDate()).padStart(2,"0"); return `${yyyy}-${mm}-${dd}`; }
+function todayISO(){ return dateToISOLocal(new Date()); }
 function fmtDate(iso){ if(!iso) return "-"; const d = new Date(iso+"T00:00:00"); return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}); }
-function addDays(iso, days){ if(!iso || days===""||days===null||days===undefined) return null; const d=new Date(iso+"T00:00:00"); d.setDate(d.getDate()+N(days)); return d.toISOString().slice(0,10); }
+function addDays(iso, days){ if(!iso || days===""||days===null||days===undefined) return null; const d=new Date(iso+"T00:00:00"); d.setDate(d.getDate()+N(days)); return dateToISOLocal(d); }
 function uid(prefix){ return prefix + "-" + Math.random().toString(36).slice(2,8); }
 
 function nextFolio(){
@@ -1515,28 +1533,68 @@ function bindFolioRowClicks(){
 /* =========================================================================
    SOLICITUDES
    ========================================================================= */
-function renderSolicitudes(){
-  const selStatus = document.getElementById("filterStatus");
-  if(selStatus.options.length<=1){
-    STATUS_FLOW.concat([{key:CANCEL_KEY}]).forEach(s=>{
-      const o = document.createElement("option"); o.value=s.key; o.textContent=s.key; selStatus.appendChild(o);
+let filtroStatusSeleccionado = []; // vacío = todos los status
+function statusFilterOptions(){ return STATUS_FLOW.map(s=>s.key).concat([CANCEL_KEY]); }
+function actualizarBotonFilterStatus(){
+  const btn = document.getElementById("filterStatusBtn");
+  if(!btn) return;
+  const car = ` <span class="car">&#9662;</span>`;
+  if(filtroStatusSeleccionado.length===0) btn.innerHTML = "Todos los status"+car;
+  else if(filtroStatusSeleccionado.length===1) btn.innerHTML = filtroStatusSeleccionado[0]+car;
+  else btn.innerHTML = filtroStatusSeleccionado.length+" status seleccionados"+car;
+}
+function renderFilterStatusPanel(){
+  const panel = document.getElementById("filterStatusPanel");
+  const opciones = statusFilterOptions();
+  panel.innerHTML = `
+    <div class="msi-actions"><a id="msLimpiar">Limpiar</a><a id="msTodos">Seleccionar todos</a></div>
+    ${opciones.map(k=>`<label class="msi"><input type="checkbox" data-msstatus="${k}" ${filtroStatusSeleccionado.includes(k)?"checked":""}> ${k}</label>`).join("")}
+  `;
+  panel.querySelectorAll("[data-msstatus]").forEach(chk=>{
+    chk.addEventListener("change", ()=>{
+      const k = chk.dataset.msstatus;
+      if(chk.checked){ if(!filtroStatusSeleccionado.includes(k)) filtroStatusSeleccionado.push(k); }
+      else { filtroStatusSeleccionado = filtroStatusSeleccionado.filter(x=>x!==k); }
+      actualizarBotonFilterStatus();
+      applySolicitudesFilter();
     });
-  }
+  });
+  document.getElementById("msLimpiar").addEventListener("click", ()=>{
+    filtroStatusSeleccionado = [];
+    renderFilterStatusPanel(); actualizarBotonFilterStatus(); applySolicitudesFilter();
+  });
+  document.getElementById("msTodos").addEventListener("click", ()=>{
+    filtroStatusSeleccionado = statusFilterOptions();
+    renderFilterStatusPanel(); actualizarBotonFilterStatus(); applySolicitudesFilter();
+  });
+  actualizarBotonFilterStatus();
+}
+document.getElementById("filterStatusBtn").addEventListener("click", (e)=>{
+  e.stopPropagation();
+  const panel = document.getElementById("filterStatusPanel");
+  panel.hidden = !panel.hidden;
+});
+document.addEventListener("click", (e)=>{
+  const wrap = document.getElementById("filterStatusWrap");
+  const panel = document.getElementById("filterStatusPanel");
+  if(wrap && panel && !panel.hidden && !wrap.contains(e.target)) panel.hidden = true;
+});
+function renderSolicitudes(){
   const selCliente = document.getElementById("filterCliente");
   const seleccionActual = selCliente.value;
   selCliente.innerHTML = `<option value="">Todos los clientes</option>` +
     empresasUnicas().map(e=>`<option value="${e}" ${e===seleccionActual?"selected":""}>${e}</option>`).join("");
+  renderFilterStatusPanel();
   applySolicitudesFilter();
 }
 function foliosFiltradosActuales(){
   const q = (document.getElementById("searchCR").value||"").toLowerCase();
-  const st = document.getElementById("filterStatus").value;
   const emp = document.getElementById("filterCliente").value;
   let list = state.folios.filter(f=>{
     const cli = clienteById(f.idCliente);
     const dets = detallesDe(f.cr);
     const haystack = [f.cr, cli?cli.empresa:"", f.contacto, ...dets.map(d=>d.descripcion), ...dets.map(d=>d.numeroParte)].join(" ").toLowerCase();
-    return (!q || haystack.includes(q)) && (!st || f.status===st) && (!emp || (cli && cli.empresa===emp));
+    return (!q || haystack.includes(q)) && (filtroStatusSeleccionado.length===0 || filtroStatusSeleccionado.includes(f.status)) && (!emp || (cli && cli.empresa===emp));
   });
   list.sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||""));
   return list;
@@ -1547,7 +1605,6 @@ function applySolicitudesFilter(){
   bindFolioRowClicks();
 }
 document.getElementById("searchCR").addEventListener("input", applySolicitudesFilter);
-document.getElementById("filterStatus").addEventListener("change", applySolicitudesFilter);
 document.getElementById("filterCliente").addEventListener("change", applySolicitudesFilter);
 function exportarSolicitudesFiltradas(){
   const list = foliosFiltradosActuales();
@@ -2379,20 +2436,47 @@ document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
    NUEVA SOLICITUD
    ========================================================================= */
 let renglonesTemp = [];
-function abrirModalSolicitud(){
+function renglonVacio(){ return {id:uid("R"), descripcion:"", cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:""}; }
+function renglonesDesdeCR(cr){
+  const dets = detallesDe(cr);
+  return dets.map(d=>({
+    id:uid("R"), descripcion:d.descripcion||"", cantidad:d.cantidad||1, numeroParte:d.numeroParte||"",
+    tiempoEntregaValor:d.tiempoEntregaValor||"", tiempoEntregaUnidad:d.tiempoEntregaUnidad||"días",
+    link:d.link||"", notas:d.notas||""
+  }));
+}
+function abrirModalSolicitud(crOrigen){
   if(state.clientes.length===0){
     showToast("Primero agrega al menos un cliente", true);
     goto("clientes");
     return;
   }
-  renglonesTemp = [{id:uid("R"), descripcion:"", cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:""}];
+  const esOrigenValido = typeof crOrigen==="string" && crOrigen;
+  const origenFolio = esOrigenValido ? state.folios.find(f=>f.cr===crOrigen) : null;
+  if(origenFolio){
+    const copiados = renglonesDesdeCR(origenFolio.cr);
+    renglonesTemp = copiados.length ? copiados : [renglonVacio()];
+  } else {
+    renglonesTemp = [renglonVacio()];
+  }
   pintarFormSolicitud();
+  if(origenFolio){
+    const cliOrigen = clienteById(origenFolio.idCliente);
+    const selEmpresa = document.getElementById("sf_empresa");
+    if(selEmpresa && cliOrigen && cliOrigen.empresa){
+      selEmpresa.value = cliOrigen.empresa;
+      selEmpresa.dispatchEvent(new Event("change"));
+      const selContacto = document.getElementById("sf_contactoSel");
+      if(selContacto){
+        selContacto.value = origenFolio.idCliente;
+        selContacto.dispatchEvent(new Event("change"));
+      }
+    }
+    showToast("Se copiaron "+renglonesTemp.length+" renglón(es) de "+origenFolio.cr+" — revisa y ajusta antes de guardar.");
+  }
   document.getElementById("modalSolicitud").classList.add("active");
 }
-function pintarFormSolicitud(){
-  const empresas = empresasUnicas();
-  const opcionesEmpresa = empresas.map(e=>`<option value="${e}">${e}</option>`).join("");
-
+function renderRenglonesWrap(){
   const renglonesHtml = renglonesTemp.map((r,i)=>`
     <div class="renglon-box">
       ${renglonesTemp.length>1?`<button class="btn btn-outline btn-sm rem" data-rem="${r.id}">Quitar</button>`:""}
@@ -2414,6 +2498,29 @@ function pintarFormSolicitud(){
       <div class="field"><label>Link</label><input data-f="link" data-id="${r.id}" value="${r.link}"></div>
       <div class="field"><label>Notas <span class="hint">(historial de búsqueda, ej. "cotizado con Proveedor A")</span></label><textarea data-f="notas" data-id="${r.id}">${r.notas}</textarea></div>
     </div>`).join("");
+  const wrap = document.getElementById("renglonesWrap");
+  wrap.innerHTML = renglonesHtml;
+  wrap.querySelectorAll('[data-f]').forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const r = renglonesTemp.find(x=>x.id===inp.dataset.id);
+      r[inp.dataset.f] = inp.value;
+    });
+  });
+  wrap.querySelectorAll('[data-rem]').forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      renglonesTemp = renglonesTemp.filter(r=>r.id!==btn.dataset.rem);
+      renderRenglonesWrap();
+    });
+  });
+}
+function pintarFormSolicitud(){
+  const empresas = empresasUnicas();
+  const opcionesEmpresa = empresas.map(e=>`<option value="${e}">${e}</option>`).join("");
+  const crsConItems = state.folios.filter(f=>detallesDe(f.cr).length>0);
+  const opcionesCopiar = crsConItems.map(f=>{
+    const c = clienteById(f.idCliente);
+    return `<option value="${f.cr}">${f.cr} — ${c?c.empresa:"(sin cliente)"} (${detallesDe(f.cr).length} item${detallesDe(f.cr).length>1?"s":""})</option>`;
+  }).join("");
 
   document.getElementById("formSolicitud").innerHTML = `
     <div class="note">Folio a generar: <strong class="mono">${nextFolio()}</strong> &middot; Status inicial: <strong>Pendiente</strong></div>
@@ -2431,14 +2538,23 @@ function pintarFormSolicitud(){
     </div>
     <div class="field" style="max-width:48%;"><label>Fecha de solicitud</label><input type="date" id="sf_fecha" value="${todayISO()}"></div>
     <p class="small muted">¿La empresa o el contacto no existen todavía? <a href="#" id="sf_nuevoCliente">Agrégalo aquí</a> y regresa a este formulario.</p>
+    ${crsConItems.length ? `
+    <div class="field" style="max-width:80%;">
+      <label>Copiar items de una CR existente <span class="hint">(opcional, reemplaza los renglones de abajo)</span></label>
+      <div style="display:flex; gap:8px;">
+        <select id="sf_copiarDeCR" style="flex:1;"><option value="">Selecciona una CR...</option>${opcionesCopiar}</select>
+        <button class="btn btn-outline btn-sm" type="button" id="sf_btnCopiarItems" style="width:auto; white-space:nowrap;">Copiar items</button>
+      </div>
+    </div>` : ""}
     <div class="divider"></div>
-    <div id="renglonesWrap">${renglonesHtml}</div>
+    <div id="renglonesWrap"></div>
     <button class="btn btn-outline btn-sm" id="btnAddRenglon">+ Agregar renglón (otro número de parte)</button>
     <div class="flex-between" style="margin-top:18px;">
       <button class="btn btn-outline" id="sf_cancel">Cancelar</button>
       <button class="btn btn-primary" id="sf_save">Registrar solicitud</button>
     </div>
   `;
+  renderRenglonesWrap();
 
   document.getElementById("sf_cancel").addEventListener("click", cerrarModales);
   document.getElementById("sf_nuevoCliente").addEventListener("click", (e)=>{ e.preventDefault(); abrirModalCliente(null); });
@@ -2466,20 +2582,18 @@ function pintarFormSolicitud(){
   });
 
   document.getElementById("btnAddRenglon").addEventListener("click", ()=>{
-    renglonesTemp.push({id:uid("R"), descripcion:"", cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:""});
-    pintarFormSolicitud();
+    renglonesTemp.push(renglonVacio());
+    renderRenglonesWrap();
   });
-  document.querySelectorAll('[data-f]').forEach(inp=>{
-    inp.addEventListener("input", ()=>{
-      const r = renglonesTemp.find(x=>x.id===inp.dataset.id);
-      r[inp.dataset.f] = inp.value;
-    });
-  });
-  document.querySelectorAll('[data-rem]').forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      renglonesTemp = renglonesTemp.filter(r=>r.id!==btn.dataset.rem);
-      pintarFormSolicitud();
-    });
+  const btnCopiarItems = document.getElementById("sf_btnCopiarItems");
+  if(btnCopiarItems) btnCopiarItems.addEventListener("click", ()=>{
+    const crSel = document.getElementById("sf_copiarDeCR").value;
+    if(!crSel){ showToast("Selecciona de qué CR quieres copiar los items", true); return; }
+    const copiados = renglonesDesdeCR(crSel);
+    if(copiados.length===0){ showToast("Esa CR no tiene renglones capturados", true); return; }
+    renglonesTemp = copiados;
+    renderRenglonesWrap();
+    showToast(copiados.length+" renglón(es) copiado(s) de "+crSel+" — revisa y ajusta antes de guardar.");
   });
   document.getElementById("sf_save").addEventListener("click", guardarNuevaSolicitud);
 }
@@ -2516,8 +2630,8 @@ function guardarNuevaSolicitud(){
   currentCR = cr; goto("detalle");
   showToast("Solicitud "+cr+" registrada");
 }
-document.getElementById("btnNuevaSolicitudNav").addEventListener("click", abrirModalSolicitud);
-document.getElementById("btnNuevaSolicitud2").addEventListener("click", abrirModalSolicitud);
+document.getElementById("btnNuevaSolicitudNav").addEventListener("click", ()=>abrirModalSolicitud());
+document.getElementById("btnNuevaSolicitud2").addEventListener("click", ()=>abrirModalSolicitud());
 
 /* =========================================================================
    CANCELAR SOLICITUD
@@ -2597,6 +2711,7 @@ function renderDetalle(){
   const idx = STATUS_FLOW.findIndex(s=>s.key===folio.status);
   const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
   const mostrarOCPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="PO Recibida") || (folio.status===CANCEL_KEY && folio.noOC);
+  const mostrarFacturaPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="Factura Generada") || (folio.status===CANCEL_KEY && folio.noFactura);
 
   const costosBloqueados = !puedeAgregarItems;
   const renglonesHtml = dets.map(d=>{
@@ -2682,6 +2797,9 @@ function renderDetalle(){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura generada &rarr; Factura Generada</button>
                      <p class="small muted" style="margin-top:8px;">Esperando disponibilidad del material con el proveedor. Monto a facturar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Factura Generada"){
+    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura enviada &rarr; Factura Enviada</button>
+                     <p class="small muted" style="margin-top:8px;">Captura el número de factura arriba y usa "Enviar factura por correo" cuando esté lista. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+  } else if(folio.status==="Factura Enviada"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material entregado &rarr; Material Entregado</button>
                      <p class="small muted" style="margin-top:8px;">Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Material Entregado"){
@@ -2708,11 +2826,16 @@ function renderDetalle(){
       <div>
         <h1 class="page-title mono">${folio.cr}</h1>
         <p class="page-sub">${cli?cli.empresa:"(sin cliente)"} &middot; Solicitado el ${fmtDate(folio.fechaSolicitud)}</p>
-        ${mostrarOCPersistente ? `<p class="small" style="margin:6px 0 0; display:flex; align-items:center; gap:6px;"><span class="muted">No. de OC del cliente:</span> <input id="inpOCPersistente" value="${folio.noOC||""}" style="width:auto; max-width:180px; padding:3px 8px; font-size:12.5px;"></p>` : ""}
+        ${(mostrarOCPersistente || mostrarFacturaPersistente) ? `<p class="small" style="margin:6px 0 0; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+          ${mostrarOCPersistente ? `<span style="display:flex; align-items:center; gap:6px;"><span class="muted">No. de OC del cliente:</span> <input id="inpOCPersistente" value="${folio.noOC||""}" style="width:auto; max-width:180px; padding:3px 8px; font-size:12.5px;"></span>` : ""}
+          ${mostrarFacturaPersistente ? `<span style="display:flex; align-items:center; gap:6px;"><span class="muted">No. de factura:</span> <input id="inpFacturaPersistente" value="${folio.noFactura||""}" placeholder="Ej. F-1234" style="width:auto; max-width:150px; padding:3px 8px; font-size:12.5px;"></span>` : ""}
+        </p>` : ""}
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
         ${badgeHtml(folio.status)}
         <button class="btn btn-outline btn-sm" id="btnImprimirCaja">&#128230; Imprimir identificación de caja</button>
+        ${mostrarFacturaPersistente ? `<button class="btn btn-outline btn-sm" id="btnCorreoFacturaHeader">&#128231; Enviar factura por correo</button>` : ""}
+        ${dets.length ? `<button class="btn btn-outline btn-sm" id="btnDuplicarCR">&#128203; Duplicar como nueva CR</button>` : ""}
       </div>
     </div>
 
@@ -3045,6 +3168,12 @@ function renderDetalle(){
   if(dcTelefono) dcTelefono.addEventListener("change", ()=>{ folio.telContacto = dcTelefono.value.trim(); markDirty(); });
   const inpOCPersistente = document.getElementById("inpOCPersistente");
   if(inpOCPersistente) inpOCPersistente.addEventListener("change", ()=>{ folio.noOC = inpOCPersistente.value.trim(); markDirty(); });
+  const inpFacturaPersistente = document.getElementById("inpFacturaPersistente");
+  if(inpFacturaPersistente) inpFacturaPersistente.addEventListener("change", ()=>{ folio.noFactura = inpFacturaPersistente.value.trim(); markDirty(); });
+  const btnCorreoFacturaHeader = document.getElementById("btnCorreoFacturaHeader");
+  if(btnCorreoFacturaHeader) btnCorreoFacturaHeader.addEventListener("click", ()=>prepararCorreoFactura(folio));
+  const btnDuplicarCR = document.getElementById("btnDuplicarCR");
+  if(btnDuplicarCR) btnDuplicarCR.addEventListener("click", ()=>abrirModalSolicitud(folio.cr));
 }
 
 /* =========================================================================
@@ -3517,6 +3646,29 @@ function prepararCorreo(folio, cli, dets){
   const to = encodeURIComponent(folio.correoContacto||"");
   window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyPlano)}`;
 }
+const FACTURA_EMAIL_DESTINO = "facturasmeq@cranepi.com";
+function prepararCorreoFactura(folio){
+  if(!folio.noOC){ showToast("Esta CR no tiene número de OC capturado todavía", true); return; }
+  const subject = "ODC "+folio.noOC+", RM";
+
+  const bodyPlano =
+    "Anexamos factura correspondiente.\n\n"+
+    "Atentamente,\nAMD Business Services\n"+(state.config.empresaCorreo||"")+(state.config.empresaTelefono?(" | "+state.config.empresaTelefono):"");
+
+  const bodyHtml = `
+    <div style="font-family:Arial,sans-serif; font-size:13px; color:#1f2937;">
+      <p>Anexamos factura correspondiente.</p>
+      <p style="margin-top:18px;">Atentamente,<br /><strong>AMD Business Services</strong><br />${state.config.empresaCorreo||""} ${state.config.empresaTelefono?(" | "+state.config.empresaTelefono):""}</p>
+      ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services" style="height:34px; margin-top:8px;">`:""}
+    </div>`;
+
+  copiarHtmlAlPortapapeles(bodyHtml, bodyPlano).then(ok=>{
+    if(ok) showToast("Correo de factura abierto y copiamos una versión con firma y logo — pégala (Ctrl+V) sobre el cuerpo si quieres esa versión formateada. Recuerda adjuntar la factura a mano.");
+    else showToast("Correo de factura abierto. Adjunta la factura a mano (el navegador no puede adjuntarla ni enviarla solo).");
+  });
+
+  window.location.href = `mailto:${encodeURIComponent(FACTURA_EMAIL_DESTINO)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyPlano)}`;
+}
 function enviarWhatsapp(folio, cli){
   const tel = folio.telContacto || (cli?cli.telefono:"");
   const link = waLink(tel, "Hola "+(folio.contacto||"")+", te compartimos la propuesta "+qtFolio(folio.cr)+" correspondiente a tu solicitud "+folio.cr+". Cualquier duda quedamos atentos.");
@@ -3669,7 +3821,7 @@ function excelSerialToISO(v){
       if(mm>=1 && mm<=12 && dd>=1 && dd<=31) return `${yyyy}-${String(mm).padStart(2,"0")}-${String(dd).padStart(2,"0")}`;
     }
     const d = new Date(s);
-    return isNaN(d) ? "" : d.toISOString().slice(0,10);
+    return isNaN(d) ? "" : dateToISOLocal(d);
   }
   const d = XLSX.SSF.parse_date_code(v);
   if(!d) return "";
@@ -3700,7 +3852,7 @@ function importarWorkbook(wb){
         fechaSolicitud: excelSerialToISO(col(r,map,"Fecha Solicitud")),
         idCliente:String(col(r,map,"ID_Cliente")),
         contacto:col(r,map,"Nombre Contacto"), correoContacto:col(r,map,"Correo Contacto"), telContacto:col(r,map,"Teléfono Contacto"),
-        status, noOC:col(r,map,"No. OC Cliente"), notasGenerales:col(r,map,"Notas Generales"),
+        status, noOC:col(r,map,"No. OC Cliente"), noFactura:col(r,map,"No. de Factura"), notasGenerales:col(r,map,"Notas Generales"),
         fechaSeguimiento: excelSerialToISO(col(r,map,"Fecha Seguimiento")), notaSeguimiento: col(r,map,"Nota Seguimiento"),
         cancelada:(status===CANCEL_KEY),
         motivoCancelacion:col(r,map,"Motivo Cancelación"), fechaCancelacion:excelSerialToISO(col(r,map,"Fecha Cancelación")),
@@ -3715,6 +3867,7 @@ function importarWorkbook(wb){
       folio.fechas["PO Recibida"] = excelSerialToISO(col(r,map,"Fecha OC Recibida"));
       folio.fechas["Material Solicitado"] = excelSerialToISO(col(r,map,"Fecha Material Solicitado"));
       folio.fechas["Factura Generada"] = excelSerialToISO(col(r,map,"Fecha Factura Generada"));
+      folio.fechas["Factura Enviada"] = excelSerialToISO(col(r,map,"Fecha Factura Enviada"));
       folio.fechas["Material Entregado"] = excelSerialToISO(col(r,map,"Fecha Material Entregado"));
       folio.fechas["Pago Recibido"] = excelSerialToISO(col(r,map,"Fecha Pago Recibido"));
       folio.fechas["Complemento Generado"] = excelSerialToISO(col(r,map,"Fecha Complemento Generado"));
@@ -3900,7 +4053,7 @@ document.getElementById("btnSave").addEventListener("click", async ()=>{
 
 const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
   "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Total Final con IVA","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
-  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Días de Crédito",
+  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","No. de Factura","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Fecha Factura Enviada","Días de Crédito",
   "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
   "Fecha Finalizada","Notas Generales","Fecha Seguimiento","Nota Seguimiento","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
 function filaFolioExcel(f){
@@ -3911,7 +4064,7 @@ function filaFolioExcel(f){
     f.status, siguientePasoDe(f), costoTotalFolio(f.cr), costoTotalFolioConIVA(f.cr), utilidadFolioPlaneada(f.cr),
     tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
     f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
-    f.noOC, f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], diasCreditoDe(f), fpp||"",
+    f.noOC, f.noFactura||"", f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], f.fechas["Factura Enviada"], diasCreditoDe(f), fpp||"",
     f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
     f.fechas["Finalizada"], f.notasGenerales, f.fechaSeguimiento||"", f.notaSeguimiento||"", f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
 }
