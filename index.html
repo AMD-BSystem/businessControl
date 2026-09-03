@@ -680,9 +680,9 @@ const STATUS_FLOW = [
   {key:"Propuesta Enviada",    next:"PO Recibida",            hint:"Esperar OC del cliente"},
   {key:"PO Recibida",          next:"Material Solicitado",    hint:"Solicitar/comprar el material con el proveedor"},
   {key:"Material Solicitado",  next:"Factura Generada",       hint:"Esperar disponibilidad del material y generar factura"},
-  {key:"Factura Generada",     next:"Factura Enviada",        hint:"Enviar la factura al cliente por correo"},
-  {key:"Factura Enviada",      next:"Material Entregado",     hint:"Entregar material"},
-  {key:"Material Entregado",   next:"Pago Recibido",          hint:"Monitorear pago"},
+  {key:"Factura Generada",     next:"Material Entregado",     hint:"Entregar material"},
+  {key:"Material Entregado",   next:"Factura Enviada",        hint:"Enviar la factura al cliente por correo"},
+  {key:"Factura Enviada",      next:"Pago Recibido",          hint:"Monitorear pago"},
   {key:"Pago Recibido",        next:"Complemento Generado",   hint:"Generar complemento de pago"},
   {key:"Complemento Generado", next:"Finalizada",             hint:"Cerrar / archivar folio"},
   {key:"Finalizada",           next:null,                     hint:"Proceso completado"}
@@ -697,8 +697,8 @@ const STATUS_COLORS = {
   "PO Recibida":          {bg:"#b4c7e7", fg:"#16233f"},
   "Material Solicitado":  {bg:"#a8b9dc", fg:"#16233f"},
   "Factura Generada":     {bg:"#9dc3e6", fg:"#16233f"},
-  "Factura Enviada":      {bg:"#96bce3", fg:"#0f1f38"},
-  "Material Entregado":   {bg:"#8ea9db", fg:"#0a0f1c"},
+  "Material Entregado":   {bg:"#96bce3", fg:"#0f1f38"},
+  "Factura Enviada":      {bg:"#8ea9db", fg:"#0a0f1c"},
   "Pago Recibido":        {bg:"#a9d18e", fg:"#1e4620"},
   "Complemento Generado": {bg:"#d9d9d9", fg:"#333333"},
   "Finalizada":           {bg:"#041629", fg:"#ffffff"},
@@ -2797,12 +2797,12 @@ function renderDetalle(){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura generada &rarr; Factura Generada</button>
                      <p class="small muted" style="margin-top:8px;">Esperando disponibilidad del material con el proveedor. Monto a facturar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Factura Generada"){
-    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura enviada &rarr; Factura Enviada</button>
-                     <p class="small muted" style="margin-top:8px;">Captura el número de factura arriba y usa "Enviar factura por correo" cuando esté lista. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
-  } else if(folio.status==="Factura Enviada"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material entregado &rarr; Material Entregado</button>
-                     <p class="small muted" style="margin-top:8px;">Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Captura el número de factura arriba. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Material Entregado"){
+    accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura enviada &rarr; Factura Enviada</button>
+                     <p class="small muted" style="margin-top:8px;">Usa "Enviar factura por correo" arriba cuando esté lista. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+  } else if(folio.status==="Factura Enviada"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar pago recibido &rarr; Pago Recibido</button>
                      <p class="small muted" style="margin-top:8px;">Fecha probable de pago: <strong>${fpp?fmtDate(fpp):"captura la fecha de factura para calcularla"}</strong> (según días de crédito del cliente).<br>Monto a cobrar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
   } else if(folio.status==="Pago Recibido"){
@@ -4053,8 +4053,8 @@ document.getElementById("btnSave").addEventListener("click", async ()=>{
 
 const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / Cliente","Nombre Contacto","Correo Contacto",
   "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Total Final con IVA","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
-  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","No. de Factura","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Fecha Factura Enviada","Días de Crédito",
-  "Fecha Probable de Pago","Fecha Material Entregado","Fecha Pago Recibido","Fecha Complemento Generado",
+  "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","No. de Factura","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Fecha Material Entregado","Fecha Factura Enviada","Días de Crédito",
+  "Fecha Probable de Pago","Fecha Pago Recibido","Fecha Complemento Generado",
   "Fecha Finalizada","Notas Generales","Fecha Seguimiento","Nota Seguimiento","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
 function filaFolioExcel(f){
   ensureFechas(f);
@@ -4064,8 +4064,8 @@ function filaFolioExcel(f){
     f.status, siguientePasoDe(f), costoTotalFolio(f.cr), costoTotalFolioConIVA(f.cr), utilidadFolioPlaneada(f.cr),
     tieneGastosRealesAsignados(f.cr) ? utilidadFolioReal(f.cr) : "", qtFolio(f.cr),
     f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
-    f.noOC, f.noFactura||"", f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], f.fechas["Factura Enviada"], diasCreditoDe(f), fpp||"",
-    f.fechas["Material Entregado"], f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
+    f.noOC, f.noFactura||"", f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], f.fechas["Material Entregado"], f.fechas["Factura Enviada"], diasCreditoDe(f), fpp||"",
+    f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
     f.fechas["Finalizada"], f.notasGenerales, f.fechaSeguimiento||"", f.notaSeguimiento||"", f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
 }
 const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
