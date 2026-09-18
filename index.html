@@ -1505,8 +1505,7 @@ function tablaFolios(list){
   }
   const rows = list.map(f=>{
     const cli = clienteById(f.idCliente);
-    const total = costoTotalFolio(f.cr);
-    const uPlaneada = utilidadFolioPlaneada(f.cr);
+    const totalConIva = costoTotalFolioConIVA(f.cr);
     const uReal = tieneGastosRealesAsignados(f.cr) ? money(utilidadFolioReal(f.cr)) : "<span class='muted small'>Sin gastos aún</span>";
     const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
@@ -1516,13 +1515,13 @@ function tablaFolios(list){
       <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
       <td>${badgeHtml(f.status)}</td>
       <td class="mono">${f.noOC || "<span class='muted'>-</span>"}</td>
-      <td class="money right">${money(total)}</td>
-      <td class="money right" style="color:var(--ok)">${money(uPlaneada)}</td>
+      <td class="money right">${money(totalConIva)}</td>
+      <td class="mono right">${f.noFactura || "<span class='muted'>-</span>"}</td>
       <td class="right" style="color:var(--ok)">${uReal}</td>
       <td class="right">${pagoInfoHtml(f)}</td>
     </tr>`;
   }).join("");
-  return `<table class="tbl"><thead><tr><th>Folio</th><th>Seguimiento</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final</th><th class="right">Utilidad planeada</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="tbl"><thead><tr><th>Folio</th><th>Seguimiento</th><th>Cliente</th><th>Descripción</th><th>Status</th><th>OC</th><th class="right">Costo final (IVA incl.)</th><th class="right">No. Factura</th><th class="right">Utilidad real</th><th class="right">Pago</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function bindFolioRowClicks(){
   document.querySelectorAll("tr[data-cr]").forEach(tr=>{
@@ -2676,6 +2675,8 @@ function safeId(cr, rn){ return String(cr).replace(/[^A-Za-z0-9]/g,"_") + "_" + 
 function setText(id, txt){ const el = document.getElementById(id); if(el) el.textContent = txt; }
 function refrescarTotalesFolio(cr){
   setText("costoTotalFolioDisplay", money(costoTotalFolio(cr)));
+  setText("ivaTotalFolioDisplay", money(costoTotalFolioConIVA(cr) - costoTotalFolio(cr)));
+  setText("costoTotalConIvaFolioDisplay", money(costoTotalFolioConIVA(cr)));
   setText("utilidadPlaneadaFolioDisplay", money(utilidadFolioPlaneada(cr)));
   setText("utilidadRealFolioDisplay", tieneGastosRealesAsignados(cr) ? money(utilidadFolioReal(cr)) : "Sin gastos registrados aún");
 }
@@ -2898,6 +2899,8 @@ function renderDetalle(){
       ${renglonesHtml}
       <div class="divider"></div>
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
+      <div class="kv"><span class="k">IVA (16%)</span><span class="v money" id="ivaTotalFolioDisplay">${money(costoTotalFolioConIVA(folio.cr) - totalFinal)}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente (con IVA)</span><span class="v money" id="costoTotalConIvaFolioDisplay">${money(costoTotalFolioConIVA(folio.cr))}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad planeada <span class="hint">(según costos del renglón)</span></span><span class="v money" id="utilidadPlaneadaFolioDisplay" style="color:var(--ok)">${money(utilidadPlaneada)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad real <span class="hint">(precio − gastos reales asignados)</span></span><span class="v money" id="utilidadRealFolioDisplay" style="color:var(--ok)">${utilidadReal}</span></div>
     </div>
