@@ -1211,6 +1211,32 @@ async function subirAdjuntosCR(folioCR, files){
   if(fallos) showToast(fallos+" documento(s) no se pudieron subir", true);
   return ok>0;
 }
+async function guardarNotaRemisionBlob(folioCR, blob, filename){
+  try{
+    const ref = await resolverCarpetaAdjuntosCR(folioCR);
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("Nota de remisión guardada en OneDrive ("+ADJUNTOS_ROOT_NAME+"/"+folioCR+"): "+filename);
+        adjuntosCache.delete(folioCR);
+        cargarYRenderAdjuntos(folioCR);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  // Respaldo: si no hay sesión de Microsoft o algo falló, se descarga normal
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó la nota de remisión en PDF.", true);
+}
 async function eliminarAdjuntoCR(folioCR, item){
   try{
     await graphFetch(`/drives/${item.driveId}/items/${item.id}`, { method: "DELETE" });
@@ -1290,6 +1316,7 @@ function nextFolio(){
   return prefix+String(count+1).padStart(3,"0");
 }
 function qtFolio(cr){ return cr.replace("CR-","QT-"); }
+function nrFolio(cr){ return cr.replace("CR-","NR-"); }
 function nextPOFolio(){
   const d = new Date();
   const yy = String(d.getFullYear()).slice(-2);
@@ -2835,6 +2862,7 @@ function renderDetalle(){
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
         ${badgeHtml(folio.status)}
         <button class="btn btn-outline btn-sm" id="btnImprimirCaja">&#128230; Imprimir identificación de caja</button>
+        <button class="btn btn-outline btn-sm" id="btnImprimirNotaRemision">&#128203; Generar nota de remisión (PDF)</button>
         ${mostrarFacturaPersistente ? `<button class="btn btn-outline btn-sm" id="btnCorreoFacturaHeader">&#128231; Enviar factura por correo</button>` : ""}
         ${dets.length ? `<button class="btn btn-outline btn-sm" id="btnDuplicarCR">&#128203; Duplicar como nueva CR</button>` : ""}
       </div>
@@ -3119,6 +3147,8 @@ function renderDetalle(){
   });
   const btnImprimirCaja = document.getElementById("btnImprimirCaja");
   if(btnImprimirCaja) btnImprimirCaja.addEventListener("click", ()=>imprimirIdentificacionCaja(folio, cli, dets));
+  const btnImprimirNotaRemision = document.getElementById("btnImprimirNotaRemision");
+  if(btnImprimirNotaRemision) btnImprimirNotaRemision.addEventListener("click", ()=>generarNotaRemisionPDF(folio, cli, dets));
   const btnAdjuntarDoc = document.getElementById("btnAdjuntarDoc");
   const inpAdjuntoFile = document.getElementById("inpAdjuntoFile");
   if(btnAdjuntarDoc && inpAdjuntoFile){
@@ -3752,6 +3782,124 @@ function imprimirIdentificacionCaja(folio, cli, dets){
   w.document.close();
   w.focus();
   setTimeout(()=>{ try{ w.print(); }catch(err){ console.error(err); } }, 300);
+}
+
+/* =========================================================================
+   NOTA DE REMISIÓN — hoja para acompañar la entrega de material al cliente:
+   logo, folio NR-, fecha, cliente, OC, contacto, lista de materiales y
+   espacio para firma de recibido. Se manda directo a imprimir (no genera
+   un PDF para guardar).
+   ========================================================================= */
+function construirHtmlNotaRemision(folio, cli, dets){
+  const filas = dets.map((d,i)=>`
+    <tr>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; text-align:center;">${i+1}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb;">${d.descripcion||""}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; font-family:'Courier New',monospace;">${d.numeroParte||"-"}</td>
+      <td style="padding:8px; border-bottom:1px solid #e5e7eb; text-align:center; font-weight:700;">${d.cantidad||1}</td>
+    </tr>`).join("");
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Nota de remisión ${folio.cr}</title>
+<style>
+  @page { size: letter; margin: 0.45in; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI', Arial, sans-serif; color:#1f2937; }
+  .box { border:3px solid #0b2545; border-radius:16px; padding:26px; }
+  .hdr { display:flex; align-items:center; justify-content:space-between; border-bottom:3px solid #0b2545; padding-bottom:16px; margin-bottom:18px; }
+  .hdr img { max-height:72px; max-width:280px; }
+  .hdr-right { text-align:right; }
+  .hdr-lbl { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#64748b; font-weight:700; }
+  .folio { font-size:32px; font-weight:800; color:#0b2545; font-family:'Courier New',monospace; line-height:1.1; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; }
+  .cell { background:#f8fafc; border:1px solid #dbe3ef; border-radius:10px; padding:11px 15px; }
+  .cell.full { grid-column:1/3; }
+  .cell .k { font-size:10.5px; text-transform:uppercase; color:#64748b; font-weight:700; letter-spacing:.05em; }
+  .cell .v { font-size:18px; font-weight:700; color:#0b2545; margin-top:3px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  thead th { background:#0f172a; color:#fff; padding:9px 8px; text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  .firma-wrap { display:grid; grid-template-columns:1fr 1fr; gap:40px; margin-top:60px; }
+  .firma-linea { border-top:1.5px solid #0b2545; padding-top:8px; text-align:center; font-size:12px; color:#334155; font-weight:600; }
+  .foot { margin-top:18px; font-size:10px; color:#94a3b8; text-align:right; }
+  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="hdr">
+      ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services">`:`<div style="font-weight:800; font-size:20px; color:#0b2545;">AMD Business Services</div>`}
+      <div class="hdr-right">
+        <div class="hdr-lbl">Nota de remisión</div>
+        <div class="folio">${nrFolio(folio.cr)}</div>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="cell"><div class="k">Fecha</div><div class="v">${fmtDate(todayISO())}</div></div>
+      <div class="cell"><div class="k">Orden de compra</div><div class="v">${folio.noOC||"Pendiente"}</div></div>
+      <div class="cell"><div class="k">Cliente</div><div class="v">${cli?cli.empresa:"-"}</div></div>
+      <div class="cell"><div class="k">Atención de</div><div class="v">${folio.contacto||"-"}</div></div>
+    </div>
+    <table>
+      <thead><tr><th style="text-align:center;">#</th><th>Descripción</th><th>No. de parte</th><th style="text-align:center;">Cant.</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table>
+    <div class="firma-wrap">
+      <div class="firma-linea">Nombre y firma de quien recibe</div>
+      <div class="firma-linea">Fecha de recepción</div>
+    </div>
+    <div class="foot">Impreso el ${fmtDate(todayISO())} &middot; AMD Business Services</div>
+  </div>
+</body>
+</html>`;
+}
+async function generarNotaRemisionPDF(folio, cli, dets){
+  if(!dets || dets.length===0){ showToast("Esta CR no tiene renglones capturados todavía", true); return; }
+  showToast("Generando PDF de la nota de remisión...");
+  try{
+    const htmlDoc = construirHtmlNotaRemision(folio, cli, dets);
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-99999px";
+    iframe.style.top = "0";
+    iframe.style.width = "850px";
+    iframe.style.height = "1100px";
+    document.body.appendChild(iframe);
+    await new Promise(resolve=>{
+      iframe.onload = resolve;
+      iframe.srcdoc = htmlDoc;
+    });
+    await new Promise(r=>setTimeout(r, 80));
+    const target = iframe.contentDocument.querySelector(".box") || iframe.contentDocument.body;
+    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
+    document.body.removeChild(iframe);
+
+    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({unit:"pt", format:"letter"});
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth;
+    const imgHeight = canvas.height * imgWidth / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+    const TOLERANCIA = 12;
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+    while(heightLeft > TOLERANCIA){
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+    const pdfBlob = pdf.output("blob");
+    await guardarNotaRemisionBlob(folio.cr, pdfBlob, nrFolio(folio.cr)+".pdf");
+    showToast("Nota de remisión "+nrFolio(folio.cr)+" generada");
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo generar el PDF de la nota de remisión. Revisa la consola.", true);
+  }
 }
 
 /* =========================================================================
