@@ -651,7 +651,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
             <div class="no-break" style="background:#f8fafc; border-left:4px solid #26a6c9; border-radius:9px; padding:10px 12px; font-size:11px; line-height:1.45; color:#334155;"><strong style="color:#0f172a;">CONDICIONES COMERCIALES</strong><br />{{CondicionesComerciales}}</div>
           </td>
           <td style="width:42%; vertical-align:top;">
-            <table width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:12px;"><tr><td style="padding:5px 0; color:#64748b;">Subtotal:</td><td align="right" style="padding:5px 0; font-weight:700;">{{Subtotal}}</td></tr><tr><td style="padding:5px 0; color:#64748b;">IVA:</td><td align="right" style="padding:5px 0; font-weight:700;">{{IVAAmount}}</td></tr><tr><td colspan="2" style="padding-top:5px;"><div style="background:linear-gradient(135deg,#0b2545,#145da0); color:#fff; border-radius:11px; padding:12px; text-align:right;"><div style="font-size:10px; opacity:.85; text-transform:uppercase;">Total</div><div style="font-size:23px; font-weight:800;">{{Total}}</div></div></td></tr></table>
+            <table width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:12px;"><tr><td style="padding:5px 0; color:#64748b;">Subtotal:</td><td align="right" style="padding:5px 0; font-weight:700;">{{Subtotal}}</td></tr>{{DescuentoRow}}<tr><td style="padding:5px 0; color:#64748b;">IVA:</td><td align="right" style="padding:5px 0; font-weight:700;">{{IVAAmount}}</td></tr><tr><td colspan="2" style="padding-top:5px;"><div style="background:linear-gradient(135deg,#0b2545,#145da0); color:#fff; border-radius:11px; padding:12px; text-align:right;"><div style="font-size:10px; opacity:.85; text-transform:uppercase;">Total</div><div style="font-size:23px; font-weight:800;">{{Total}}</div></div></td></tr></table>
           </td>
         </tr>
       </table>
@@ -1330,6 +1330,15 @@ function costoUnitarioPO(it, moneda){ return moneda==="USD" ? N(it.costoUnitario
 function totalPO(po){
   const moneda = po.moneda||"MXN";
   return round2((po.items||[]).reduce((s,it)=>s+costoUnitarioPO(it,moneda)*N(it.cantidad),0));
+}
+function descuentoPctPO(po){
+  return (po.descuentoPct!==undefined && po.descuentoPct!==null && po.descuentoPct!=="") ? N(po.descuentoPct) : 0;
+}
+function descuentoMontoPO(po){
+  return round2(totalPO(po)*(descuentoPctPO(po)/100));
+}
+function subtotalPOConDescuento(po){
+  return round2(totalPO(po)-descuentoMontoPO(po));
 }
 
 function normalizeLetters(s){ return (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Za-z]/g,""); }
@@ -2975,7 +2984,7 @@ function renderDetalle(){
                 <td class="mono">${po.folio}</td>
                 <td>${prov?prov.nombreComercial:"(proveedor eliminado)"}</td>
                 <td class="mono">${fmtDate(po.fecha)}</td>
-                <td class="right money">${money(totalPO(po))} ${po.moneda||"MXN"}</td>
+                <td class="right money">${money(subtotalPOConDescuento(po))} ${po.moneda||"MXN"}${descuentoPctPO(po)>0?` <span class="small muted">(desc. ${descuentoPctPO(po)}%)</span>`:""}</td>
                 <td class="right"><button class="btn btn-outline btn-sm" data-regenerarpo="${po.folio}">Volver a generar PDF</button></td>
               </tr>`;
             }).join("")}
@@ -3336,6 +3345,7 @@ function construirHtmlPropuesta(folio, cli, dets){
     ItemsTable: construirFilasItems(dets),
     CondicionesComerciales: (state.config.condicionesComerciales || "Precios sujetos a cambio sin previo aviso.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
+    DescuentoRow: "",
     IVAAmount: money(ivaMonto),
     Total: money(total),
     CorreoAMD: state.config.empresaCorreo || "",
@@ -3425,9 +3435,12 @@ function construirFilasItemsPO(items, moneda){
 function construirHtmlPO(po, proveedor, folio){
   const moneda = po.moneda || "MXN";
   const ivaPct = (po.ivaPct!==undefined && po.ivaPct!==null && po.ivaPct!=="") ? N(po.ivaPct) : 16;
+  const descuentoPct = (po.descuentoPct!==undefined && po.descuentoPct!==null && po.descuentoPct!=="") ? N(po.descuentoPct) : 0;
   const subtotal = totalPO(po);
-  const ivaMonto = round2(subtotal*(ivaPct/100));
-  const total = round2(subtotal+ivaMonto);
+  const descuentoMonto = round2(subtotal*(descuentoPct/100));
+  const subtotalConDescuento = round2(subtotal-descuentoMonto);
+  const ivaMonto = round2(subtotalConDescuento*(ivaPct/100));
+  const total = round2(subtotalConDescuento+ivaMonto);
   const map = {
     TituloDocumento: "ORDEN DE COMPRA",
     EtiquetaFolio: "No. Orden de Compra",
@@ -3450,6 +3463,7 @@ function construirHtmlPO(po, proveedor, folio){
     ItemsTable: construirFilasItemsPO(po.items, moneda),
     CondicionesComerciales: (po.notas || "Favor de confirmar recepción y tiempo de entrega de esta orden de compra.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
+    DescuentoRow: descuentoPct>0 ? `<tr><td style="padding:5px 0; color:#64748b;">Descuento (${descuentoPct}%):</td><td align="right" style="padding:5px 0; font-weight:700; color:#b91c1c;">-${money(descuentoMonto)}</td></tr>` : "",
     IVAAmount: money(ivaMonto),
     Total: money(total),
     CorreoAMD: state.config.empresaCorreo || "",
@@ -3558,12 +3572,44 @@ function abrirModalPO(folio){
         <div class="field"><label>Condición de entrega</label><input id="po_condicionentrega" value="${poExistente?(poExistente.condicionEntrega||""):(state.config.condicionEntrega||"")}"></div>
         <div class="field"><label>% IVA</label><input type="number" step="0.01" id="po_iva" value="${(poExistente&&poExistente.ivaPct!==undefined&&poExistente.ivaPct!==null&&poExistente.ivaPct!=="")?poExistente.ivaPct:16}"></div>
       </div>
+      <div class="field"><label>% Descuento <span class="hint">(se aplica sobre el subtotal, antes del IVA)</span></label><input type="number" step="0.01" min="0" max="100" id="po_descuento" value="${(poExistente&&poExistente.descuentoPct!==undefined&&poExistente.descuentoPct!==null&&poExistente.descuentoPct!=="")?poExistente.descuentoPct:0}"></div>
+      <div class="field" style="background:#f8fafc; border:1px solid #dbe3ef; border-radius:10px; padding:10px 14px;">
+        <div class="kv"><span class="k">Subtotal</span><span class="v money" id="po_resumenSubtotal">-</span></div>
+        <div class="kv" id="po_resumenDescuentoRow" style="display:none;"><span class="k">Descuento</span><span class="v money" id="po_resumenDescuento">-</span></div>
+        <div class="kv"><span class="k">IVA</span><span class="v money" id="po_resumenIva">-</span></div>
+        <div class="kv"><span class="k">Total</span><span class="v money" id="po_resumenTotal">-</span></div>
+      </div>
       <div class="field"><label>Notas para el proveedor <span class="hint">(opcional, van en "Condiciones comerciales" del PDF)</span></label><textarea id="po_notas">${poExistente?(poExistente.notas||""):""}</textarea></div>
       <div class="flex-between">
         <button class="btn btn-outline" id="po_cancel">Cancelar</button>
         <button class="btn btn-primary" id="po_save">${poExistente?("Guardar cambios en "+poExistente.folio+" y regenerar PDF"):"Generar PO y PDF"}</button>
       </div>
     `;
+    function recalcularResumenPO(){
+      const moneda = document.getElementById("po_moneda").value;
+      const seleccionados = Array.from(document.querySelectorAll("[data-poitem]:checked")).map(chk=>N(chk.dataset.poitem));
+      const subtotal = round2(dets.filter(d=>seleccionados.includes(d.noRenglon)).reduce((s,d)=>{
+        const costoUSD = d.costoArticuloUSD ? N(d.costoArticuloUSD) : round2(N(d.costoArticulo)/(N(folio.tipoCambio)||18));
+        const costo = moneda==="USD" ? costoUSD : N(d.costoArticulo);
+        return s + costo*(N(d.cantidad)||1);
+      },0));
+      const descuentoPct = Math.max(0, Math.min(100, N(document.getElementById("po_descuento").value)||0));
+      const ivaPct = N(document.getElementById("po_iva").value)||0;
+      const descuentoMonto = round2(subtotal*(descuentoPct/100));
+      const subtotalConDescuento = round2(subtotal-descuentoMonto);
+      const ivaMonto = round2(subtotalConDescuento*(ivaPct/100));
+      const total = round2(subtotalConDescuento+ivaMonto);
+      document.getElementById("po_resumenSubtotal").textContent = money(subtotal)+" "+moneda;
+      document.getElementById("po_resumenDescuentoRow").style.display = descuentoPct>0 ? "" : "none";
+      document.getElementById("po_resumenDescuento").textContent = "-"+money(descuentoMonto)+" "+moneda+" ("+descuentoPct+"%)";
+      document.getElementById("po_resumenIva").textContent = money(ivaMonto)+" "+moneda;
+      document.getElementById("po_resumenTotal").textContent = money(total)+" "+moneda;
+    }
+    document.getElementById("po_moneda").addEventListener("change", recalcularResumenPO);
+    document.getElementById("po_iva").addEventListener("input", recalcularResumenPO);
+    document.getElementById("po_descuento").addEventListener("input", recalcularResumenPO);
+    document.querySelectorAll("[data-poitem]").forEach(chk=>chk.addEventListener("change", recalcularResumenPO));
+    recalcularResumenPO();
     document.getElementById("po_cancel").addEventListener("click", cerrarModales);
     document.getElementById("po_save").addEventListener("click", async ()=>{
       const idProveedor = document.getElementById("po_proveedor").value;
@@ -3583,6 +3629,7 @@ function abrirModalPO(folio){
         tiempoEntrega: document.getElementById("po_tiempoentrega").value.trim(),
         condicionEntrega: document.getElementById("po_condicionentrega").value.trim(),
         ivaPct: N(document.getElementById("po_iva").value),
+        descuentoPct: Math.max(0, Math.min(100, N(document.getElementById("po_descuento").value)||0)),
         items, notas: document.getElementById("po_notas").value.trim()
       };
       let po;
@@ -4117,6 +4164,7 @@ function importarWorkbook(wb){
         formaPago: col(r,map,"Forma de Pago"), tiempoEntrega: col(r,map,"Tiempo de Entrega"),
         condicionEntrega: col(r,map,"Condición de Entrega"),
         ivaPct: (col(r,map,"% IVA")!=="") ? N(col(r,map,"% IVA")) : 16,
+        descuentoPct: (col(r,map,"% Descuento")!=="") ? N(col(r,map,"% Descuento")) : 0,
         notas:col(r,map,"Notas"), items:[]
       });
     });
@@ -4277,12 +4325,13 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inyAoa), "Inyecciones");
 
   const poEncAoa = [
-    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Moneda","Forma de Pago","Tiempo de Entrega","Condición de Entrega","% IVA","Notas","Total"],
+    ["PO (folio)","CR","ID_Proveedor","Proveedor","Fecha","Moneda","Forma de Pago","Tiempo de Entrega","Condición de Entrega","% IVA","% Descuento","Notas","Total"],
     ...state.pos.map(po=>{
       const prov = proveedorById(po.idProveedor);
       return [po.folio, po.cr, po.idProveedor, prov?prov.nombreComercial:"", po.fecha, po.moneda||"MXN",
         po.formaPago||"", po.tiempoEntrega||"", po.condicionEntrega||"", (po.ivaPct!==undefined&&po.ivaPct!==null&&po.ivaPct!=="")?N(po.ivaPct):16,
-        po.notas||"", totalPO(po)];
+        descuentoPctPO(po),
+        po.notas||"", subtotalPOConDescuento(po)];
     })
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(poEncAoa), "POs_Encabezado");
