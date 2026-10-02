@@ -1100,46 +1100,6 @@ async function guardarPdfBlob(blob, filename){
   showToast("No se pudo guardar en OneDrive; se descargó el PDF normal.", true);
 }
 
-const PO_FOLDER_SHARE_URL = "https://1drv.ms/f/c/5d74b477fff6ebb3/IgBK-HEuEVxoSbhfmWK_vBceAa9_YaV6xOTmLhYT8To0hm8?e=UzZX3w";
-let poFolderRef = null; // {driveId, itemId}, se resuelve una vez y se cachea
-async function resolverCarpetaPOs(){
-  if(poFolderRef) return poFolderRef;
-  if(!PO_FOLDER_SHARE_URL) return null;
-  try{
-    const token = codificarShareToken(PO_FOLDER_SHARE_URL);
-    const res = await graphFetch(`/shares/${token}/driveItem`);
-    const item = await res.json();
-    if(item && item.folder){
-      poFolderRef = { driveId: item.parentReference.driveId, itemId: item.id };
-      return poFolderRef;
-    }
-  }catch(err){ console.warn("No se pudo resolver la carpeta de POs en OneDrive", err); }
-  return null;
-}
-async function guardarPOBlob(blob, filename){
-  try{
-    const ref = await resolverCarpetaPOs();
-    if(ref){
-      const token = await obtenerTokenGraph();
-      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
-        method: "PUT",
-        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
-        body: blob
-      });
-      if(res.ok){
-        showToast("PO guardada en OneDrive (7_AMD POs): "+filename);
-        return;
-      }
-    }
-  }catch(err){ console.error(err); }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-  showToast("No se pudo guardar en OneDrive; se descargó el PDF de la PO normal.", true);
-}
-
 /* =========================================================================
    ADJUNTOS DE CR (cotizaciones y otros documentos) — se guardan en OneDrive,
    en una subcarpeta por folio, dentro de "Adjuntos CRs" junto al Excel.
@@ -1237,6 +1197,32 @@ async function guardarNotaRemisionBlob(folioCR, blob, filename){
   URL.revokeObjectURL(url);
   showToast("No se pudo guardar en OneDrive; se descargó la nota de remisión en PDF.", true);
 }
+async function guardarPOBlob(folioCR, blob, filename){
+  try{
+    const ref = await resolverCarpetaAdjuntosCR(folioCR);
+    if(ref){
+      const token = await obtenerTokenGraph();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${ref.driveId}/items/${ref.itemId}:/${encodeURIComponent(filename)}:/content`, {
+        method: "PUT",
+        headers: { "Authorization":"Bearer "+token, "Content-Type":"application/octet-stream" },
+        body: blob
+      });
+      if(res.ok){
+        showToast("PO guardada en OneDrive ("+ADJUNTOS_ROOT_NAME+"/"+folioCR+"): "+filename);
+        adjuntosCache.delete(folioCR);
+        cargarYRenderAdjuntos(folioCR);
+        return;
+      }
+    }
+  }catch(err){ console.error(err); }
+  // Respaldo: si no hay sesión de Microsoft o algo falló, se descarga normal
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  showToast("No se pudo guardar en OneDrive; se descargó el PDF de la PO normal.", true);
+}
 async function eliminarAdjuntoCR(folioCR, item){
   try{
     await graphFetch(`/drives/${item.driveId}/items/${item.id}`, { method: "DELETE" });
@@ -1317,15 +1303,16 @@ function nextFolio(){
 }
 function qtFolio(cr){ return cr.replace("CR-","QT-"); }
 function nrFolio(cr){ return cr.replace("CR-","NR-"); }
-function nextPOFolio(){
-  const d = new Date();
-  const yy = String(d.getFullYear()).slice(-2);
-  const mm = String(d.getMonth()+1).padStart(2,"0");
-  const prefix = "PO-"+yy+mm;
-  const count = state.pos.filter(p=>p.folio.startsWith(prefix)).length;
-  return prefix+String(count+1).padStart(3,"0");
-}
 function posDeCR(cr){ return state.pos.filter(p=>p.cr===cr); }
+function nextPOFolio(cr){
+  const crNum = cr.replace("CR-","");
+  const prefix = "PO-"+crNum+"-";
+  const existentes = posDeCR(cr)
+    .map(p=>N((p.folio||"").replace(prefix,"")))
+    .filter(n=>!isNaN(n) && isFinite(n));
+  const siguiente = (existentes.length ? Math.max(...existentes) : 0) + 1;
+  return prefix+String(siguiente).padStart(2,"0");
+}
 function costoUnitarioPO(it, moneda){ return moneda==="USD" ? N(it.costoUnitarioUSD) : N(it.costoUnitarioMXN); }
 function totalPO(po){
   const moneda = po.moneda||"MXN";
@@ -3512,7 +3499,7 @@ async function generarPOPDF(po, proveedor, folio){
       heightLeft -= pageHeight;
     }
     const pdfBlob = pdf.output("blob");
-    await guardarPOBlob(pdfBlob, po.folio+".pdf");
+    await guardarPOBlob(folio.cr, pdfBlob, po.folio+".pdf");
     showToast("PO "+po.folio+" generada");
   }catch(err){
     console.error(err);
@@ -3638,7 +3625,7 @@ function abrirModalPO(folio){
         poExistente.fecha = todayISO();
         po = poExistente;
       } else {
-        po = { folio: nextPOFolio(), cr: folio.cr, fecha: todayISO(), ...datosPO };
+        po = { folio: nextPOFolio(folio.cr), cr: folio.cr, fecha: todayISO(), ...datosPO };
         state.pos.push(po);
       }
       cerrarModales(); markDirty();
