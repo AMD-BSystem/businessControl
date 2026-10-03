@@ -732,6 +732,8 @@ let currentCR = null;
 const MSAL_CLIENT_ID = "be752399-69eb-429c-a3bb-a9cf21e1365c";
 const MSAL_AUTHORITY = "https://login.microsoftonline.com/consumers";
 const MSAL_SCOPES = ["User.Read", "Files.ReadWrite"];
+const MSAL_SCOPES_MAIL = ["Mail.Send"];
+const CORREO_ENVIO_PROPUESTAS = "AMD_Servicio@outlook.com";
 const CUENTAS_AUTORIZADAS = ["amd_laser_qro@outlook.com", "alex_juarezvega@outlook.com", "amd_servicio@outlook.com"];
 const EXCEL_FILENAME = "Control_Cotizaciones.xlsx";
 const EXCEL_SHARE_URL = "https://1drv.ms/x/c/5d74b477fff6ebb3/IQD-mBTZt7stTYA77TS6hPTeASS8i3sasTuRwP6k_hDz7xU?e=Bg5Th6";
@@ -802,6 +804,43 @@ async function obtenerTokenGraph(){
     catch(err2){ console.error(err2); }
     return null;
   }
+}
+// Token específico para enviar correos desde la cuenta compartida AMD_Servicio@outlook.com,
+// sin tocar la sesión de OneDrive que esté activa (puede ser otra de las cuentas autorizadas).
+// Usa loginPopup/acquireTokenPopup (no redirect) para no perder el estado de la app en pantalla.
+async function obtenerTokenCorreoAMDServicio(){
+  await msalListo;
+  const cuentaPrevia = msalInstance.getActiveAccount();
+  let cuenta = msalInstance.getAllAccounts().find(a=>(a.username||"").toLowerCase()===CORREO_ENVIO_PROPUESTAS.toLowerCase());
+  try{
+    if(!cuenta){
+      const resp = await msalInstance.loginPopup({ scopes: MSAL_SCOPES_MAIL, loginHint: CORREO_ENVIO_PROPUESTAS });
+      cuenta = resp.account;
+    }
+    if(!cuenta || (cuenta.username||"").toLowerCase()!==CORREO_ENVIO_PROPUESTAS.toLowerCase()){
+      throw new Error("La cuenta con la que iniciaste sesión no es "+CORREO_ENVIO_PROPUESTAS);
+    }
+    let token;
+    try{
+      const res = await msalInstance.acquireTokenSilent({ scopes: MSAL_SCOPES_MAIL, account: cuenta });
+      token = res.accessToken;
+    }catch(err){
+      const res = await msalInstance.acquireTokenPopup({ scopes: MSAL_SCOPES_MAIL, account: cuenta });
+      token = res.accessToken;
+    }
+    return token;
+  }finally{
+    // Restaura la cuenta "activa" de MSAL para no afectar la sesión de OneDrive de este navegador.
+    if(cuentaPrevia) msalInstance.setActiveAccount(cuentaPrevia);
+  }
+}
+function blobToBase64(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 async function graphFetch(path, options){
   const token = await obtenerTokenGraph();
@@ -2743,7 +2782,10 @@ function renderDetalle(){
     const sid = safeId(d.cr, d.noRenglon);
     const dis = costosBloqueados ? "disabled" : "";
     return `<div class="renglon-box">
-      ${!costosBloqueados ? `<button class="btn btn-outline btn-sm rem" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>` : ""}
+      ${!costosBloqueados ? `<div class="rem" style="display:flex; gap:6px;">
+        <button class="btn btn-outline btn-sm" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>
+        ${dets.length>1 ? `<button class="btn btn-outline btn-sm" data-eliminaritem data-cr="${d.cr}" data-rn="${d.noRenglon}" title="Eliminar este renglón de la CR">&times; Eliminar</button>` : ""}
+      </div>` : ""}
       <div class="renglon-num">Renglón ${d.noRenglon} &middot; ${d.numeroParte||"s/n"}</div>
       <div class="grid-2">
         <div><strong>${d.descripcion}</strong><div class="small muted">Entrega: ${tiempoEntregaTexto(d)} ${d.link?('&middot; <a href="'+d.link+'" target="_blank">link</a>'):""}</div></div>
@@ -2811,7 +2853,7 @@ function renderDetalle(){
         <div class="field" style="align-self:end;"><button class="btn btn-primary" id="btnAvanzar">Registrar OC &rarr; PO Recibida</button></div>
       </div>
       <div style="margin-top:10px; display:flex; gap:8px;">
-        <button class="btn btn-outline" id="btnAbrirCorreo">Preparar correo</button>
+        <button class="btn btn-outline" id="btnAbrirCorreo">&#128231; Enviar correo (AMD_Servicio)</button>
         <button class="btn btn-outline" id="btnWhatsapp">Enviar por WhatsApp</button>
       </div>`;
   } else if(folio.status==="PO Recibida"){
@@ -3113,7 +3155,7 @@ function renderDetalle(){
   const btnPdf = document.getElementById("btnGenerarPropuesta");
   if(btnPdf) btnPdf.addEventListener("click", ()=>generarPropuestaPDF(folio, cli, dets));
   const btnCorreo = document.getElementById("btnAbrirCorreo");
-  if(btnCorreo) btnCorreo.addEventListener("click", ()=>prepararCorreo(folio, cli, dets));
+  if(btnCorreo) btnCorreo.addEventListener("click", ()=>enviarCorreoPropuestaAMDServicio(folio, cli, dets));
   const btnWa = document.getElementById("btnWhatsapp");
   if(btnWa) btnWa.addEventListener("click", ()=>enviarWhatsapp(folio, cli));
   const btnAgregarItem = document.getElementById("btnAgregarItem");
@@ -3122,6 +3164,11 @@ function renderDetalle(){
     btn.addEventListener("click", ()=>{
       const d = state.detalles.find(x=>x.cr===btn.dataset.cr && x.noRenglon==btn.dataset.rn);
       if(d) abrirModalEditarItem(d);
+    });
+  });
+  cont.querySelectorAll("[data-eliminaritem]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      eliminarRenglon(btn.dataset.cr, N(btn.dataset.rn));
     });
   });
   cont.querySelectorAll("[data-goto]").forEach(a=>{
@@ -3208,6 +3255,21 @@ function renderDetalle(){
 /* =========================================================================
    AGREGAR ITEM A UNA CR EXISTENTE (solo permitido antes de "PO Recibida")
    ========================================================================= */
+function eliminarRenglon(cr, noRenglon){
+  const folio = state.folios.find(f=>f.cr===cr);
+  if(!folio) return;
+  const idx = STATUS_FLOW.findIndex(s=>s.key===folio.status);
+  const puedeAgregarItems = folio.status!==CANCEL_KEY && idx < STATUS_FLOW.findIndex(s=>s.key===CANCELABLE_BEFORE);
+  if(!puedeAgregarItems){ showToast("Ya no se pueden eliminar renglones (folio en o después de \"PO Recibida\")", true); return; }
+  const dets = detallesDe(cr);
+  if(dets.length<=1){ showToast("No puedes eliminar el único renglón de la CR", true); return; }
+  const d = dets.find(x=>x.noRenglon===noRenglon);
+  if(!d) return;
+  if(!confirm('¿Eliminar el renglón '+d.noRenglon+' ("'+(d.descripcion||"")+'") de esta CR? Esta acción no se puede deshacer.')) return;
+  state.detalles = state.detalles.filter(x=>!(x.cr===cr && x.noRenglon===noRenglon));
+  markDirty(); renderDetalle();
+  showToast("Renglón eliminado de "+cr);
+}
 function abrirModalAgregarItem(folio){
   document.getElementById("formAgregarItem").innerHTML = `
     <div class="field"><label>Descripción del artículo</label><input id="ai_desc"></div>
@@ -3342,52 +3404,59 @@ function construirHtmlPropuesta(folio, cli, dets){
   Object.keys(map).forEach(k=>{ html = html.split("{{"+k+"}}").join(String(map[k])); });
   return html;
 }
-async function generarPropuestaPDF(folio, cli, dets){
+function validarPropuestaCompleta(dets){
   if(dets.some(d=>N(precioFinalRenglon(d))<=0)){
-    showToast("Falta capturar costos/ganancia en algún renglón", true); return;
+    showToast("Falta capturar costos/ganancia en algún renglón", true); return false;
   }
   if(dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
-    showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return;
+    showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return false;
   }
+  return true;
+}
+async function construirPropuestaPdfBlob(folio, cli, dets){
+  const htmlDoc = construirHtmlPropuesta(folio, cli, dets);
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-99999px";
+  iframe.style.top = "0";
+  iframe.style.width = "850px";
+  iframe.style.height = "1100px";
+  document.body.appendChild(iframe);
+  await new Promise(resolve=>{
+    iframe.onload = resolve;
+    iframe.srcdoc = htmlDoc;
+  });
+  await new Promise(r=>setTimeout(r, 80));
+  const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
+  const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
+  document.body.removeChild(iframe);
+
+  const imgData = canvas.toDataURL("image/jpeg", 0.95);
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({unit:"pt", format:"letter"});
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const imgWidth = pageWidth;
+  const imgHeight = canvas.height * imgWidth / canvas.width;
+  let heightLeft = imgHeight;
+  let position = 0;
+  const TOLERANCIA = 12; // pt: evita una 2a hoja casi en blanco por redondeo
+  pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+  heightLeft -= pageHeight;
+  while(heightLeft > TOLERANCIA){
+    position = heightLeft - imgHeight;
+    pdf.addPage();
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+  }
+  return pdf.output("blob");
+}
+async function generarPropuestaPDF(folio, cli, dets){
+  if(!validarPropuestaCompleta(dets)) return;
   const qt = qtFolio(folio.cr);
   showToast("Generando PDF...");
   try{
-    const htmlDoc = construirHtmlPropuesta(folio, cli, dets);
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.left = "-99999px";
-    iframe.style.top = "0";
-    iframe.style.width = "850px";
-    iframe.style.height = "1100px";
-    document.body.appendChild(iframe);
-    await new Promise(resolve=>{
-      iframe.onload = resolve;
-      iframe.srcdoc = htmlDoc;
-    });
-    await new Promise(r=>setTimeout(r, 80));
-    const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
-    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
-    document.body.removeChild(iframe);
-
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({unit:"pt", format:"letter"});
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = canvas.height * imgWidth / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
-    const TOLERANCIA = 12; // pt: evita una 2a hoja casi en blanco por redondeo
-    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    while(heightLeft > TOLERANCIA){
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-    const pdfBlob = pdf.output("blob");
+    const pdfBlob = await construirPropuestaPdfBlob(folio, cli, dets);
     await guardarPdfBlob(pdfBlob, qt+".pdf");
 
     if(!folio.fechas["Propuesta Enviada"]) folio.fechas["Propuesta Enviada"] = todayISO();
@@ -3684,7 +3753,7 @@ async function copiarHtmlAlPortapapeles(html, textoPlano){
   }catch(err){ console.error(err); }
   return false;
 }
-function prepararCorreo(folio, cli, dets){
+function construirCorreoPropuesta(folio, dets){
   const qt = qtFolio(folio.cr);
   const subject = "Propuesta de cotización "+qt;
 
@@ -3705,6 +3774,11 @@ function prepararCorreo(folio, cli, dets){
       ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services" style="height:34px; margin-top:8px;">`:""}
     </div>`;
 
+  return { qt, subject, bodyPlano, bodyHtml };
+}
+function prepararCorreo(folio, cli, dets){
+  const { subject, bodyPlano, bodyHtml } = construirCorreoPropuesta(folio, dets);
+
   copiarHtmlAlPortapapeles(bodyHtml, bodyPlano).then(ok=>{
     if(ok) showToast("Correo abierto y copiamos una versión con tabla y logo — pégala (Ctrl+V) sobre el cuerpo si quieres esa versión formateada.");
     else showToast("Correo abierto con la tabla en texto plano. Adjunta el PDF a mano (el navegador no puede adjuntarlo ni enviarlo solo).");
@@ -3712,6 +3786,56 @@ function prepararCorreo(folio, cli, dets){
 
   const to = encodeURIComponent(folio.correoContacto||"");
   window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyPlano)}`;
+}
+async function enviarCorreoPropuestaAMDServicio(folio, cli, dets){
+  const destino = (folio.correoContacto||"").trim();
+  if(!destino){ showToast("Esta CR no tiene correo de contacto capturado", true); return; }
+  if(!validarPropuestaCompleta(dets)) return;
+
+  let token;
+  try{
+    token = await obtenerTokenCorreoAMDServicio();
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo iniciar sesión con "+CORREO_ENVIO_PROPUESTAS+". Se abrirá un borrador de correo en su lugar.", true);
+    prepararCorreo(folio, cli, dets);
+    return;
+  }
+
+  showToast("Generando PDF y enviando correo desde "+CORREO_ENVIO_PROPUESTAS+"...");
+  try{
+    const { qt, subject, bodyHtml } = construirCorreoPropuesta(folio, dets);
+    const pdfBlob = await construirPropuestaPdfBlob(folio, cli, dets);
+    const pdfBase64 = await blobToBase64(pdfBlob);
+
+    const res = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+      method: "POST",
+      headers: { "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: "HTML", content: bodyHtml },
+          toRecipients: [{ emailAddress: { address: destino } }],
+          attachments: [{
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name: qt+".pdf",
+            contentType: "application/pdf",
+            contentBytes: pdfBase64
+          }]
+        },
+        saveToSentItems: true
+      })
+    });
+    if(!res.ok){
+      const txt = await res.text().catch(()=>"");
+      throw new Error("Graph "+res.status+": "+txt);
+    }
+    showToast("Correo enviado a "+destino+" desde "+CORREO_ENVIO_PROPUESTAS+" con la propuesta "+qt+" adjunta.");
+  }catch(err){
+    console.error(err);
+    showToast("No se pudo enviar el correo desde "+CORREO_ENVIO_PROPUESTAS+". Se abrirá un borrador en su lugar.", true);
+    prepararCorreo(folio, cli, dets);
+  }
 }
 const FACTURA_EMAIL_DESTINO = "facturasmeq@cranepi.com";
 function prepararCorreoFactura(folio){
