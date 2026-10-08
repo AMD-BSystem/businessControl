@@ -464,6 +464,50 @@
         <div class="field"><label>Condiciones comerciales (texto libre para el PDF)</label><textarea id="cfg_condcom" placeholder="Precios sujetos a cambio sin previo aviso..."></textarea></div>
         <button class="btn btn-primary" id="btnGuardarConfig">Guardar configuración</button>
       </div>
+
+      <div class="card">
+        <h3>Parámetros para calcular precios</h3>
+        <p class="small muted" style="margin:0 0 10px;">Método: <strong>Precio = (C + E + G) ÷ (1 − m)</strong>, donde C es el costo del artículo (campo "Costo artículo" de cada renglón), E es el costo de entrega (campo "Costo entrega"), G es el costo fijo de gestión por operación y m es el margen sobre precio. Con esto, cada renglón de una CR va a mostrar un <strong>% de ganancia sugerido</strong> (editable) junto al campo que ya existe.</p>
+
+        <h4 style="margin:14px 0 6px;">Costo de entrega por viaje (E)</h4>
+        <p class="small muted" style="margin:0 0 8px;">Se reparte entre todo lo que se lleve en esa entrega, no por artículo. Este valor se usa para sugerir el campo "Costo entrega" de los renglones nuevos (si lo dejas vacío, se precarga; si ya capturaste algo, se respeta).</p>
+        <div class="grid-4">
+          <div class="field"><label>Km por viaje (ida y vuelta)</label><input type="number" step="0.01" id="cfgp_km"></div>
+          <div class="field"><label>Combustible ($/km)</label><input type="number" step="0.01" id="cfgp_combustible"></div>
+          <div class="field"><label>Desgaste/mtto/seguro ($/km)</label><input type="number" step="0.01" id="cfgp_desgaste"></div>
+          <div class="field"><label>Horas de la persona que entrega</label><input type="number" step="0.01" id="cfgp_horas"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Costo por hora de esa persona</label><input type="number" step="0.01" id="cfgp_costohora"></div>
+          <div class="kv" style="align-self:end;"><span class="k">Costo de entrega por viaje (E)</span><span class="v money" id="cfgp_eCalculado">-</span></div>
+        </div>
+
+        <h4 style="margin:14px 0 6px;">Costo de gestión por operación (G)</h4>
+        <p class="small muted" style="margin:0 0 8px;">Tiempo de cotizar, comprar, facturar y cobrar una CR completa. Se reparte entre los renglones de cada CR (si tiene 3 renglones, cada uno absorbe un tercio de G).</p>
+        <div class="field"><label>Costo de gestión (G), por CR</label><input type="number" step="0.01" id="cfgp_g"></div>
+
+        <h4 style="margin:14px 0 6px;">Margen (m) según rango de costo del artículo</h4>
+        <p class="small muted" style="margin:0 0 8px;">El costo del artículo del renglón (cantidad × costo unitario) se compara contra "Hasta" de cada rango, de menor a mayor, y se usa el margen del primer rango donde cabe. Deja "Hasta" vacío en el último rango para "sin límite".</p>
+        <div id="preciosBracketsWrap"></div>
+        <button class="btn btn-outline btn-sm" id="btnAgregarRangoMargen" style="margin-top:8px;">+ Agregar rango</button>
+
+        <h4 style="margin:14px 0 6px;">Ajuste automático por crédito</h4>
+        <p class="small muted" style="margin:0 0 8px;">Si el cliente de la CR tiene días de crédito capturados iguales o mayores al umbral, se suman puntos de margen a la sugerencia (compensa el financiamiento/riesgo de impago).</p>
+        <div class="grid-2">
+          <div class="field"><label>Días de crédito a partir de los cuales ajustar</label><input type="number" step="1" id="cfgp_creditodias"></div>
+          <div class="field"><label>Puntos de margen a sumar</label><input type="number" step="0.5" id="cfgp_creditopuntos"></div>
+        </div>
+
+        <h4 style="margin:14px 0 6px;">Pedido mínimo y utilidad mínima</h4>
+        <div class="grid-3">
+          <div class="field"><label>Monto mínimo de pedido sin cargo de flete</label><input type="number" step="0.01" id="cfgp_montominimo"></div>
+          <div class="field"><label>Cargo de flete si no llega al mínimo</label><input type="number" step="0.01" id="cfgp_cargoflete"></div>
+          <div class="field"><label>Utilidad mínima por cotización (MXN)</label><input type="number" step="0.01" id="cfgp_utilidadminima"></div>
+        </div>
+        <p class="small muted" style="margin:8px 0 0;">Estos dos últimos son de referencia — no se aplican solos todavía; úsalos como checklist antes de enviar la propuesta.</p>
+
+        <button class="btn btn-primary" id="btnGuardarPrecios" style="margin-top:14px;">Guardar parámetros de precios</button>
+      </div>
     </div>
 
     <div class="view" id="view-detalle">
@@ -717,7 +761,7 @@ let state = {
   ingresos: [],
   inyecciones: [],
   pos: [],
-  config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"" }
+  config: { empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"", precios:{} }
 };
 let loadedFileName = null;
 let currentCR = null;
@@ -1403,6 +1447,102 @@ function costoTotalRenglon(d){ return round2(costoConIva(d) + N(d.recoleccion) +
 function precioUnitarioFinal(d){ const cant = N(d.cantidad)||1; return round2((costoTotalRenglon(d) * (1 + N(d.pctGanancia)/100)) / cant); }
 function precioFinalRenglon(d){ const cant = N(d.cantidad)||1; return round2(precioUnitarioFinal(d) * cant); }
 function utilidadRenglon(d){ return round2(precioFinalRenglon(d) - costoTotalRenglon(d)); }
+
+/* =========================================================================
+   PARÁMETROS DE PRECIOS (método Precio = (C+E+G)/(1-m)) Y % SUGERIDO POR RENGLÓN
+   El "% de ganancia" de cada renglón sigue siendo un markup sobre costo (como
+   siempre), pero el valor SUGERIDO se calcula con el margen m correcto sobre
+   precio (según el rango de costo del artículo) y se convierte al markup
+   equivalente, para que el margen realmente obtenido sea el que se buscaba.
+   ========================================================================= */
+function asegurarPreciosDefault(){
+  const p = state.config.precios || (state.config.precios = {});
+  if(p.kmViaje===undefined || p.kmViaje===null || p.kmViaje==="") p.kmViaje = 50;
+  if(p.costoPorKm===undefined || p.costoPorKm===null || p.costoPorKm==="") p.costoPorKm = 2.5;
+  if(p.desgastePorKm===undefined || p.desgastePorKm===null || p.desgastePorKm==="") p.desgastePorKm = 4.5;
+  if(p.horasViaje===undefined || p.horasViaje===null || p.horasViaje==="") p.horasViaje = 1.5;
+  if(p.costoPorHora===undefined || p.costoPorHora===null || p.costoPorHora==="") p.costoPorHora = 120;
+  if(p.costoGestionG===undefined || p.costoGestionG===null || p.costoGestionG==="") p.costoGestionG = 150;
+  if(p.montoMinimoPedido===undefined || p.montoMinimoPedido===null || p.montoMinimoPedido==="") p.montoMinimoPedido = 3000;
+  if(p.cargoFleteMinimo===undefined || p.cargoFleteMinimo===null || p.cargoFleteMinimo==="") p.cargoFleteMinimo = 500;
+  if(p.utilidadMinimaMXN===undefined || p.utilidadMinimaMXN===null || p.utilidadMinimaMXN==="") p.utilidadMinimaMXN = 400;
+  if(p.ajusteCreditoDias===undefined || p.ajusteCreditoDias===null || p.ajusteCreditoDias==="") p.ajusteCreditoDias = 30;
+  if(p.ajusteCreditoPuntos===undefined || p.ajusteCreditoPuntos===null || p.ajusteCreditoPuntos==="") p.ajusteCreditoPuntos = 3;
+  if(!Array.isArray(p.brackets) || p.brackets.length===0){
+    p.brackets = [
+      {hasta:1000, margen:42},
+      {hasta:10000, margen:32},
+      {hasta:50000, margen:25},
+      {hasta:null, margen:15}
+    ];
+  }
+  return p;
+}
+function calcularCostoEntregaE(){
+  const p = asegurarPreciosDefault();
+  return round2(N(p.kmViaje)*(N(p.costoPorKm)+N(p.desgastePorKm)) + N(p.horasViaje)*N(p.costoPorHora));
+}
+function margenSugeridoPorCosto(costoArticulo){
+  const p = asegurarPreciosDefault();
+  const brackets = p.brackets||[];
+  if(!brackets.length) return null;
+  const ordenados = [...brackets].sort((a,b)=>{
+    const ha = (a.hasta===null||a.hasta===""||a.hasta===undefined) ? Infinity : N(a.hasta);
+    const hb = (b.hasta===null||b.hasta===""||b.hasta===undefined) ? Infinity : N(b.hasta);
+    return ha-hb;
+  });
+  for(const b of ordenados){
+    const hasta = (b.hasta===null||b.hasta===""||b.hasta===undefined) ? Infinity : N(b.hasta);
+    if(costoArticulo <= hasta) return N(b.margen);
+  }
+  return N(ordenados[ordenados.length-1].margen);
+}
+// G es "por operación" (cotizar+comprar+facturar+cobrar la CR completa), así que
+// se reparte entre los renglones de esa misma CR en vez de cobrarse una vez por renglón.
+function gAsignadoRenglon(cr){
+  const p = asegurarPreciosDefault();
+  const n = Math.max(1, detallesDe(cr).length);
+  return round2(N(p.costoGestionG)/n);
+}
+function sugerenciaRenglon(d){
+  const p = asegurarPreciosDefault();
+  if(!p.brackets || !p.brackets.length) return null;
+  const folio = state.folios.find(f=>f.cr===d.cr);
+  let margen = margenSugeridoPorCosto(costoArticuloTotal(d));
+  if(margen===null) return null;
+  let ajusteCredito = false;
+  if(folio && N(p.ajusteCreditoDias)>0 && diasCreditoDe(folio) >= N(p.ajusteCreditoDias)){
+    margen += N(p.ajusteCreditoPuntos)||0;
+    ajusteCredito = true;
+  }
+  margen = Math.min(Math.max(margen, 0), 90);
+  const g = gAsignadoRenglon(d.cr);
+  const costoBase = costoTotalRenglon(d);
+  const precioSugerido = round2((costoBase + g) / (1 - margen/100));
+  const pctGananciaSugerido = costoBase>0 ? round2((precioSugerido/costoBase - 1)*100) : margen;
+  return { margen, g, costoBase, precioSugerido, pctGananciaSugerido, ajusteCredito };
+}
+function wireBotonUsarSugerido(btn){
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const d = state.detalles.find(x=>x.cr===btn.dataset.cr && x.noRenglon==btn.dataset.rn);
+    if(!d) return;
+    const s = sugerenciaRenglon(d);
+    if(!s) return;
+    d.pctGanancia = s.pctGananciaSugerido;
+    markDirty();
+    const sid = safeId(d.cr, d.noRenglon);
+    const inp = document.getElementById("pctGanancia-"+sid);
+    if(inp) inp.value = d.pctGanancia;
+    refrescarRenglon(d);
+  });
+}
+function textoSugerenciaRenglon(d){
+  const s = sugerenciaRenglon(d);
+  if(!s) return `<span class="small muted">Define los rangos de margen en Configuración para ver una sugerencia aquí.</span>`;
+  return `<span class="small muted">Sugerido: <strong>${s.margen}% margen</strong> (&asymp; ${s.pctGananciaSugerido}% sobre costo &middot; precio &asymp; ${money(s.precioSugerido)})${s.ajusteCredito?" &middot; incluye ajuste por crédito":""}</span> `
+    + `<button type="button" class="btn btn-outline btn-sm" data-usarsugerido data-cr="${d.cr}" data-rn="${d.noRenglon}" style="margin-left:6px;">Usar</button>`;
+}
 function costoTotalFolio(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+precioFinalRenglon(d),0)); }
 // Lo que el cliente realmente paga: el subtotal cotizado + 16% de IVA (mismo cálculo que la propuesta en PDF).
 // El pago capturado al marcar "Pago Recibido" debe usar SIEMPRE este total, no el subtotal sin IVA.
@@ -2481,7 +2621,54 @@ function renderConfig(){
   document.getElementById("cfgMsAccountLabel").textContent = (typeof cuentaActiva!=="undefined" && cuentaActiva) ? cuentaActiva.username : "Ninguna";
   document.getElementById("cfgMsFileLabel").textContent = (typeof excelFileRef!=="undefined" && excelFileRef) ? EXCEL_FILENAME : "Ninguno";
   document.getElementById("cfgPdfFolderLabel").textContent = pdfFolderRef ? "2_Cotizaciones (OneDrive)" : "Ninguna";
+
+  const p = asegurarPreciosDefault();
+  document.getElementById("cfgp_km").value = p.kmViaje;
+  document.getElementById("cfgp_combustible").value = p.costoPorKm;
+  document.getElementById("cfgp_desgaste").value = p.desgastePorKm;
+  document.getElementById("cfgp_horas").value = p.horasViaje;
+  document.getElementById("cfgp_costohora").value = p.costoPorHora;
+  document.getElementById("cfgp_eCalculado").textContent = money(calcularCostoEntregaE());
+  document.getElementById("cfgp_g").value = p.costoGestionG;
+  document.getElementById("cfgp_creditodias").value = p.ajusteCreditoDias;
+  document.getElementById("cfgp_creditopuntos").value = p.ajusteCreditoPuntos;
+  document.getElementById("cfgp_montominimo").value = p.montoMinimoPedido;
+  document.getElementById("cfgp_cargoflete").value = p.cargoFleteMinimo;
+  document.getElementById("cfgp_utilidadminima").value = p.utilidadMinimaMXN;
+  renderPreciosBrackets();
 }
+function renderPreciosBrackets(){
+  const wrap = document.getElementById("preciosBracketsWrap");
+  if(!wrap) return;
+  const p = asegurarPreciosDefault();
+  wrap.innerHTML = p.brackets.map((b,i)=>`
+    <div class="grid-3" style="align-items:end; margin-bottom:6px;" data-bracketrow="${i}">
+      <div class="field"><label>${i===0?"Hasta (costo del artículo)":"Hasta"}</label><input type="number" step="0.01" data-bracket="hasta" data-idx="${i}" value="${b.hasta===null||b.hasta===undefined?"":b.hasta}" placeholder="${i===p.brackets.length-1?"Sin límite":""}"></div>
+      <div class="field"><label>Margen m (%)</label><input type="number" step="0.5" data-bracket="margen" data-idx="${i}" value="${b.margen}"></div>
+      ${p.brackets.length>1?`<button class="btn btn-outline btn-sm" data-bracketrem="${i}" style="justify-self:start;">&times; Quitar rango</button>`:""}
+    </div>`).join("");
+  wrap.querySelectorAll("[data-bracket]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const idx = N(inp.dataset.idx);
+      const campo = inp.dataset.bracket;
+      const p2 = asegurarPreciosDefault();
+      if(!p2.brackets[idx]) return;
+      p2.brackets[idx][campo] = (campo==="hasta" && inp.value==="") ? null : N(inp.value);
+    });
+  });
+  wrap.querySelectorAll("[data-bracketrem]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const p2 = asegurarPreciosDefault();
+      p2.brackets.splice(N(btn.dataset.bracketrem), 1);
+      renderPreciosBrackets();
+    });
+  });
+}
+document.getElementById("btnAgregarRangoMargen").addEventListener("click", ()=>{
+  const p = asegurarPreciosDefault();
+  p.brackets.push({hasta:null, margen:20});
+  renderPreciosBrackets();
+});
 document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
   state.config.empresaCorreo = document.getElementById("cfg_correo").value.trim();
   state.config.empresaTelefono = document.getElementById("cfg_telefono").value.trim();
@@ -2491,6 +2678,25 @@ document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
   state.config.condicionesComerciales = document.getElementById("cfg_condcom").value.trim();
   markDirty();
   showToast("Configuración guardada");
+});
+document.getElementById("btnGuardarPrecios").addEventListener("click", ()=>{
+  const p = asegurarPreciosDefault();
+  p.kmViaje = N(document.getElementById("cfgp_km").value);
+  p.costoPorKm = N(document.getElementById("cfgp_combustible").value);
+  p.desgastePorKm = N(document.getElementById("cfgp_desgaste").value);
+  p.horasViaje = N(document.getElementById("cfgp_horas").value);
+  p.costoPorHora = N(document.getElementById("cfgp_costohora").value);
+  p.costoGestionG = N(document.getElementById("cfgp_g").value);
+  p.ajusteCreditoDias = N(document.getElementById("cfgp_creditodias").value);
+  p.ajusteCreditoPuntos = N(document.getElementById("cfgp_creditopuntos").value);
+  p.montoMinimoPedido = N(document.getElementById("cfgp_montominimo").value);
+  p.cargoFleteMinimo = N(document.getElementById("cfgp_cargoflete").value);
+  p.utilidadMinimaMXN = N(document.getElementById("cfgp_utilidadminima").value);
+  // los rangos de margen (data-bracket inputs) ya se guardan solos en vivo, sobre el mismo objeto p
+  markDirty();
+  document.getElementById("cfgp_eCalculado").textContent = money(calcularCostoEntregaE());
+  if(currentCR) renderDetalle();
+  showToast("Parámetros de precios guardados");
 });
 
 /* =========================================================================
@@ -2683,7 +2889,7 @@ function guardarNuevaSolicitud(){
       cr, noRenglon:i+1, descripcion:r.descripcion.trim(), cantidad:N(r.cantidad)||1,
       numeroParte:r.numeroParte.trim(), tiempoEntregaValor:r.tiempoEntregaValor, tiempoEntregaUnidad:r.tiempoEntregaUnidad||"días",
       link:r.link.trim(), notas:r.notas.trim(),
-      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"",
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"",
       otros:[], pctGanancia:""
     });
   });
@@ -2756,6 +2962,8 @@ function refrescarRenglon(d){
   setText("utilidadRenglon-"+sid, money(utilidadRenglon(d)));
   setText("precioFinalTop-"+sid, money(precioFinalRenglon(d)));
   setText("precioUnitTop-"+sid, money(precioUnitarioFinal(d))+" c/u");
+  const sugeridoWrap = document.getElementById("sugerido-"+sid);
+  if(sugeridoWrap){ sugeridoWrap.innerHTML = textoSugerenciaRenglon(d); wireBotonUsarSugerido(sugeridoWrap.querySelector("[data-usarsugerido]")); }
   refrescarTotalesFolio(d.cr);
 }
 
@@ -2829,7 +3037,9 @@ function renderDetalle(){
         ${!costosBloqueados ? `<button class="btn btn-outline btn-sm" data-otroadd data-cr="${d.cr}" data-rn="${d.noRenglon}">+ Agregar costo extra</button>` : ""}
       </div>
       <div class="grid-3" style="margin-top:10px;">
-        <div class="field"><label>% de ganancia</label><input data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25" ${dis}></div>
+        <div class="field"><label>% de ganancia</label><input id="pctGanancia-${sid}" data-cost="pctGanancia" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.pctGanancia}" placeholder="ej. 25" ${dis}>
+          <div id="sugerido-${sid}" style="margin-top:4px;">${costosBloqueados ? "" : textoSugerenciaRenglon(d)}</div>
+        </div>
         <div class="kv" style="align-self:end;"><span class="k">Precio final por pieza</span><span class="v money" id="precioUnitFinal-${sid}">${money(precioUnitarioFinal(d))}</span></div>
         <div class="kv" style="align-self:end;"><span class="k">Utilidad del renglón</span><span class="v money" id="utilidadRenglon-${sid}" style="color:var(--ok)">${money(utilidadRenglon(d))}</span></div>
       </div>
@@ -3171,6 +3381,7 @@ function renderDetalle(){
       eliminarRenglon(btn.dataset.cr, N(btn.dataset.rn));
     });
   });
+  cont.querySelectorAll("[data-usarsugerido]").forEach(btn=>wireBotonUsarSugerido(btn));
   cont.querySelectorAll("[data-goto]").forEach(a=>{
     a.addEventListener("click", (e)=>{ e.preventDefault(); goto(a.dataset.goto); });
   });
@@ -3301,7 +3512,7 @@ function abrirModalAgregarItem(folio){
       numeroParte: document.getElementById("ai_parte").value.trim(),
       tiempoEntregaValor: document.getElementById("ai_tiempoVal").value, tiempoEntregaUnidad: document.getElementById("ai_tiempoUnidad").value,
       link: document.getElementById("ai_link").value.trim(), notas: document.getElementById("ai_notas").value.trim(),
-      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:"", empaque:"", manoObra:"", otros:[], pctGanancia:""
+      costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"", otros:[], pctGanancia:""
     });
     cerrarModales(); markDirty(); renderDetalle();
     showToast("Item agregado al folio "+folio.cr);
@@ -4139,7 +4350,7 @@ function excelSerialToISO(v){
 
 function importarWorkbook(wb){
   state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[], pos:[],
-    config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:""}};
+    config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"", precios:{}}};
 
   if(wb.SheetNames.includes("Clientes")){
     const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Clientes"], "ID_Cliente");
@@ -4304,8 +4515,13 @@ function importarWorkbook(wb){
       if(llave==="formaPago") state.config.formaPago = valor;
       if(llave==="condicionEntrega") state.config.condicionEntrega = valor;
       if(llave==="condicionesComerciales") state.config.condicionesComerciales = valor;
+      if(llave==="preciosJSON"){
+        try{ state.config.precios = valor ? JSON.parse(valor) : {}; }
+        catch(err){ console.warn("No se pudo leer la configuración de precios guardada", err); }
+      }
     });
   }
+  asegurarPreciosDefault();
   limpiarDatosResiduales();
 }
 
@@ -4460,7 +4676,8 @@ function exportarWorkbook(){
     ["vigencia", state.config.vigencia||""],
     ["formaPago", state.config.formaPago||""],
     ["condicionEntrega", state.config.condicionEntrega||""],
-    ["condicionesComerciales", state.config.condicionesComerciales||""]
+    ["condicionesComerciales", state.config.condicionesComerciales||""],
+    ["preciosJSON", JSON.stringify(asegurarPreciosDefault())]
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cfgAoa), "Config");
 
