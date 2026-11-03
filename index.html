@@ -1249,6 +1249,81 @@ async function subirAdjuntosCR(folioCR, files){
   if(fallos) showToast(fallos+" documento(s) no se pudieron subir", true);
   return ok>0;
 }
+// ---- Pegar imágenes con Ctrl+V ----
+// Modo "pendiente": para usarse antes de que exista el folio (formulario de nueva solicitud).
+// Las imágenes se guardan en memoria (con su preview) en el arreglo que se le pase,
+// y se suben a OneDrive hasta que se registre la solicitud.
+function wirePegarImagenesPendientes(containerEl, imagenesArray){
+  function render(){
+    containerEl.innerHTML = `
+      <div tabindex="0" class="paste-zone" style="border:1px dashed #cbd5e1; border-radius:8px; padding:10px; outline:none; cursor:text;">
+        <div class="small muted" data-pastehint>Haz clic aquí y presiona Ctrl+V para pegar una imagen (captura de pantalla, foto de referencia, etc.)</div>
+        ${imagenesArray.length ? `<div class="paste-thumbs" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+          ${imagenesArray.map((img,i)=>`
+            <div style="position:relative;">
+              <img src="${img.previewUrl}" style="width:70px; height:70px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0;">
+              <button type="button" data-rmimg="${i}" title="Quitar" style="position:absolute; top:-7px; right:-7px; width:18px; height:18px; border-radius:50%; background:#ef4444; color:#fff; border:none; font-size:12px; line-height:1; cursor:pointer;">&times;</button>
+            </div>`).join("")}
+        </div>` : ""}
+      </div>
+    `;
+    const zone = containerEl.querySelector(".paste-zone");
+    zone.addEventListener("paste", (e)=>{
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+      const imgItems = items.filter(it=>it.type && it.type.indexOf("image/")===0);
+      if(imgItems.length===0) return;
+      e.preventDefault();
+      imgItems.forEach(it=>{
+        const blob = it.getAsFile();
+        if(!blob) return;
+        const ext = (blob.type.split("/")[1]||"png").split(";")[0];
+        const file = new File([blob], "imagen-"+Date.now()+"-"+Math.floor(Math.random()*1000)+"."+ext, {type: blob.type});
+        imagenesArray.push({ file, previewUrl: URL.createObjectURL(blob) });
+      });
+      render();
+    });
+    containerEl.querySelectorAll("[data-rmimg]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const i = Number(btn.dataset.rmimg);
+        const img = imagenesArray[i];
+        if(img && img.previewUrl) URL.revokeObjectURL(img.previewUrl);
+        imagenesArray.splice(i,1);
+        render();
+      });
+    });
+  }
+  render();
+}
+// Modo "inmediato": para usarse cuando el folio ya existe (p.ej. modal "Editar datos"):
+// cada imagen pegada se sube de inmediato a los adjuntos de la CR.
+function wirePegarImagenesInmediato(containerEl, folioCR){
+  containerEl.innerHTML = `
+    <div tabindex="0" class="paste-zone" style="border:1px dashed #cbd5e1; border-radius:8px; padding:10px; outline:none; cursor:text;">
+      <div class="small muted" data-pastehint>Haz clic aquí y presiona Ctrl+V para pegar una imagen y subirla directo a esta CR</div>
+    </div>
+  `;
+  const zone = containerEl.querySelector(".paste-zone");
+  const hint = zone.querySelector("[data-pastehint]");
+  zone.addEventListener("paste", async (e)=>{
+    const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+    const imgItems = items.filter(it=>it.type && it.type.indexOf("image/")===0);
+    if(imgItems.length===0) return;
+    e.preventDefault();
+    const files = [];
+    imgItems.forEach(it=>{
+      const blob = it.getAsFile();
+      if(!blob) return;
+      const ext = (blob.type.split("/")[1]||"png").split(";")[0];
+      files.push(new File([blob], "imagen-"+Date.now()+"-"+Math.floor(Math.random()*1000)+"."+ext, {type: blob.type}));
+    });
+    if(files.length===0) return;
+    hint.textContent = "Subiendo imagen(es)...";
+    await subirAdjuntosCR(folioCR, files);
+    adjuntosCache.delete(folioCR);
+    if(currentCR===folioCR) cargarYRenderAdjuntos(folioCR);
+    hint.textContent = "Haz clic aquí y presiona Ctrl+V para pegar una imagen y subirla directo a esta CR";
+  });
+}
 async function guardarNotaRemisionBlob(folioCR, blob, filename){
   try{
     const ref = await resolverCarpetaAdjuntosCR(folioCR);
@@ -2700,7 +2775,7 @@ document.getElementById("btnGuardarPrecios").addEventListener("click", ()=>{
    ========================================================================= */
 let renglonesTemp = [];
 let tipoCotizacionTemp = "item";
-let proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
+let proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", imagenes:[] };
 function renglonVacio(){ return {id:uid("R"), descripcion:"", cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:""}; }
 function renglonesDesdeCR(cr){
   const dets = detallesDe(cr);
@@ -2719,11 +2794,12 @@ function abrirModalSolicitud(crOrigen){
   const esOrigenValido = typeof crOrigen==="string" && crOrigen;
   const origenFolio = esOrigenValido ? state.folios.find(f=>f.cr===crOrigen) : null;
   tipoCotizacionTemp = origenFolio ? (origenFolio.tipoCotizacion||"item") : "item";
+  (proyectoTemp.imagenes||[]).forEach(img=>{ if(img.previewUrl) URL.revokeObjectURL(img.previewUrl); });
   if(origenFolio && tipoCotizacionTemp==="proyecto"){
     const dOrigen = detallesDe(origenFolio.cr)[0];
-    proyectoTemp = dOrigen ? { nombre:dOrigen.descripcion||"", descripcionBreve:dOrigen.descripcionBreve||"", incluye:dOrigen.incluye||"", noIncluye:dOrigen.noIncluye||"" } : { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
+    proyectoTemp = dOrigen ? { nombre:dOrigen.descripcion||"", descripcionBreve:dOrigen.descripcionBreve||"", incluye:dOrigen.incluye||"", noIncluye:dOrigen.noIncluye||"", tiempoEntregaValor:dOrigen.tiempoEntregaValor||"", tiempoEntregaUnidad:dOrigen.tiempoEntregaUnidad||"días", imagenes:[] } : { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", imagenes:[] };
   } else {
-    proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
+    proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", imagenes:[] };
   }
   if(origenFolio && tipoCotizacionTemp==="item"){
     const copiados = renglonesDesdeCR(origenFolio.cr);
@@ -2796,11 +2872,25 @@ function renderCuerpoSolicitud(){
       <div class="field"><label>Descripción breve</label><textarea id="pf_descBreve">${proyectoTemp.descripcionBreve||""}</textarea></div>
       <div class="field"><label>Qué incluye</label><textarea id="pf_incluye" placeholder="Ej. Diseño, materiales, instalación, puesta en marcha...">${proyectoTemp.incluye||""}</textarea></div>
       <div class="field"><label>Qué no incluye</label><textarea id="pf_noincluye" placeholder="Ej. Mantenimiento posterior, consumibles, permisos...">${proyectoTemp.noIncluye||""}</textarea></div>
+      <div class="field" style="max-width:48%;"><label>Tiempo de entrega</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" min="0" style="width:70px;" id="pf_tiempoVal" value="${proyectoTemp.tiempoEntregaValor||""}">
+          <select id="pf_tiempoUnidad">
+            <option value="días" ${proyectoTemp.tiempoEntregaUnidad==="días"?"selected":""}>días</option>
+            <option value="semanas" ${proyectoTemp.tiempoEntregaUnidad==="semanas"?"selected":""}>semanas</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>Imágenes de referencia <span class="hint">(opcional)</span></label><div id="pf_imagenesWrap"></div></div>
     `;
     document.getElementById("pf_nombre").addEventListener("input", (e)=>{ proyectoTemp.nombre = e.target.value; });
     document.getElementById("pf_descBreve").addEventListener("input", (e)=>{ proyectoTemp.descripcionBreve = e.target.value; });
     document.getElementById("pf_incluye").addEventListener("input", (e)=>{ proyectoTemp.incluye = e.target.value; });
     document.getElementById("pf_noincluye").addEventListener("input", (e)=>{ proyectoTemp.noIncluye = e.target.value; });
+    document.getElementById("pf_tiempoVal").addEventListener("input", (e)=>{ proyectoTemp.tiempoEntregaValor = e.target.value; });
+    document.getElementById("pf_tiempoUnidad").addEventListener("change", (e)=>{ proyectoTemp.tiempoEntregaUnidad = e.target.value; });
+    if(!proyectoTemp.imagenes) proyectoTemp.imagenes = [];
+    wirePegarImagenesPendientes(document.getElementById("pf_imagenesWrap"), proyectoTemp.imagenes);
   } else {
     const crsConItems = state.folios.filter(f=>!esProyectoFolio(f) && detallesDe(f.cr).length>0);
     const opcionesCopiar = crsConItems.map(f=>{
@@ -2932,10 +3022,19 @@ function guardarNuevaSolicitud(){
     state.detalles.push({
       cr, noRenglon:1, descripcion:proyectoTemp.nombre.trim(),
       descripcionBreve:(proyectoTemp.descripcionBreve||"").trim(), incluye:(proyectoTemp.incluye||"").trim(), noIncluye:(proyectoTemp.noIncluye||"").trim(),
-      cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:"",
+      cantidad:1, numeroParte:"", tiempoEntregaValor:proyectoTemp.tiempoEntregaValor||"", tiempoEntregaUnidad:proyectoTemp.tiempoEntregaUnidad||"días", link:"", notas:"",
       costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"",
       otros:[], pctGanancia:""
     });
+    const imagenesPendientes = (proyectoTemp.imagenes||[]).map(img=>img.file).filter(Boolean);
+    if(imagenesPendientes.length){
+      subirAdjuntosCR(cr, imagenesPendientes).then(()=>{
+        adjuntosCache.delete(cr);
+        if(currentCR===cr) cargarYRenderAdjuntos(cr);
+      });
+    }
+    (proyectoTemp.imagenes||[]).forEach(img=>{ if(img.previewUrl) URL.revokeObjectURL(img.previewUrl); });
+    proyectoTemp.imagenes = [];
   } else {
     renglonesTemp.forEach((r,i)=>{
       state.detalles.push({
@@ -3049,6 +3148,7 @@ function renderDetalle(){
       <div class="grid-2">
         <div>
           <strong>${d.descripcion}</strong>
+          <div class="small muted" style="margin-top:4px;">Entrega: ${tiempoEntregaTexto(d)}</div>
           ${d.descripcionBreve ? `<div class="small muted" style="margin-top:4px;">${d.descripcionBreve}</div>` : ""}
         </div>
         <div class="right"><div class="money" id="precioFinalTop-${sid}">${money(precioFinalRenglon(d))}</div></div>
@@ -3626,11 +3726,23 @@ function abrirModalEditarItem(d){
       <div class="field"><label>Descripción breve</label><textarea id="ei_descBreve">${d.descripcionBreve||""}</textarea></div>
       <div class="field"><label>Qué incluye</label><textarea id="ei_incluye">${d.incluye||""}</textarea></div>
       <div class="field"><label>Qué no incluye</label><textarea id="ei_noincluye">${d.noIncluye||""}</textarea></div>
+      <div class="field" style="max-width:48%;"><label>Tiempo de entrega</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" min="0" style="width:70px;" id="ei_tiempoVal" value="${d.tiempoEntregaValor||""}">
+          <select id="ei_tiempoUnidad">
+            <option value="días" ${d.tiempoEntregaUnidad==="días"?"selected":""}>días</option>
+            <option value="semanas" ${d.tiempoEntregaUnidad==="semanas"?"selected":""}>semanas</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>Imágenes de referencia <span class="hint">(opcional, se suben directo a esta CR)</span></label><div id="ei_imagenesWrap"></div></div>
       <div class="flex-between">
         <button class="btn btn-outline" id="ei_cancel">Cancelar</button>
         <button class="btn btn-primary" id="ei_save">Guardar cambios</button>
       </div>
     `;
+    if(cuentaActiva) wirePegarImagenesInmediato(document.getElementById("ei_imagenesWrap"), d.cr);
+    else document.getElementById("ei_imagenesWrap").innerHTML = `<p class="small muted">Inicia sesión con Microsoft para adjuntar imágenes a esta CR.</p>`;
     document.getElementById("ei_cancel").addEventListener("click", cerrarModales);
     document.getElementById("ei_save").addEventListener("click", ()=>{
       const desc = document.getElementById("ei_desc").value.trim();
@@ -3639,6 +3751,8 @@ function abrirModalEditarItem(d){
       d.descripcionBreve = document.getElementById("ei_descBreve").value.trim();
       d.incluye = document.getElementById("ei_incluye").value.trim();
       d.noIncluye = document.getElementById("ei_noincluye").value.trim();
+      d.tiempoEntregaValor = document.getElementById("ei_tiempoVal").value;
+      d.tiempoEntregaUnidad = document.getElementById("ei_tiempoUnidad").value;
       cerrarModales(); markDirty(); renderDetalle();
       showToast("Datos del proyecto actualizados");
     });
@@ -3752,7 +3866,7 @@ function construirHtmlPropuesta(folio, cli, dets){
     Telefono: folio.telContacto||"",
     EntregaEn: (cli && cli.direccion) ? cli.direccion : "-",
     FormaPago: state.config.formaPago || "-",
-    TiempoEntrega: esProyecto ? "Según cronograma del proyecto" : tiempoEntregaGlobal(dets),
+    TiempoEntrega: tiempoEntregaGlobal(dets),
     CondicionEntrega: state.config.condicionEntrega || "-",
     IVA: "16%",
     ItemsSection: esProyecto ? bloqueProyectoHtml(dets[0]) : tablaItemsPdfWrap(construirFilasItems(dets)),
@@ -3772,7 +3886,7 @@ function validarPropuestaCompleta(dets, esProyecto){
   if(dets.some(d=>N(precioFinalRenglon(d))<=0)){
     showToast("Falta capturar costos/ganancia en algún renglón", true); return false;
   }
-  if(!esProyecto && dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
+  if(dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
     showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return false;
   }
   return true;
