@@ -680,12 +680,7 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
     </div>
 
     <div style="padding:0 24px 10px 24px;">
-      <table width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse; border:1px solid #dbe3ef; font-size:11px;">
-        <thead><tr style="background:#0f172a; color:#fff;"><th style="padding:8px 6px;">Partida</th><th style="padding:8px 6px;">Cantidad</th><th style="padding:8px 6px;">U.M.</th><th align="left" style="padding:8px 6px;">Concepto / Descripción</th><th style="padding:8px 6px;">Entrega</th><th align="right" style="padding:8px 6px;">P. Unitario</th><th align="right" style="padding:8px 6px;">Subtotal</th></tr></thead>
-        <tbody>
-          {{ItemsTable}}
-        </tbody>
-      </table>
+      {{ItemsSection}}
     </div>
 
     <div style="padding:0 24px 12px 24px;">
@@ -1557,6 +1552,7 @@ function utilidadFolioReal(cr){ return round2(costoTotalFolio(cr) - gastosAsigna
 function gastoSubtotal(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)/1.16 : N(g.costoTotal)); }
 function gastoIva(g){ return round2(g.ivaAplica!==false ? N(g.costoTotal)-gastoSubtotal(g) : 0); }
 function diasCreditoDe(folio){ const c = clienteById(folio.idCliente); return c ? N(c.diasCredito) : 0; }
+function esProyectoFolio(folio){ return !!(folio && folio.tipoCotizacion==="proyecto"); }
 function tiempoEntregaTexto(d){ return d.tiempoEntregaValor ? (d.tiempoEntregaValor+" "+(d.tiempoEntregaUnidad||"días")) : "-"; }
 function tiempoEntregaGlobal(dets){
   const vals = [...new Set(dets.map(d=>tiempoEntregaTexto(d)))];
@@ -1711,7 +1707,7 @@ function tablaFolios(list){
     const uReal = tieneGastosRealesAsignados(f.cr) ? money(utilidadFolioReal(f.cr)) : "<span class='muted small'>Sin gastos aún</span>";
     const desc = primeraDescripcionCR(f.cr);
     return `<tr data-cr="${f.cr}">
-      <td class="cr-code">${f.cr}</td>
+      <td class="cr-code">${f.cr} ${esProyectoFolio(f) ? `<span class="badge" style="background:#ede9fe; color:#5b21b6; margin-left:4px;" title="Proyecto / Servicio">PROY</span>` : ""}</td>
       <td>${seguimientoHtml(f)}</td>
       <td>${cli ? cli.empresa : "<span class='muted'>(sin cliente)</span>"}</td>
       <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${desc}">${desc || "<span class='muted'>-</span>"}</td>
@@ -2703,6 +2699,8 @@ document.getElementById("btnGuardarPrecios").addEventListener("click", ()=>{
    NUEVA SOLICITUD
    ========================================================================= */
 let renglonesTemp = [];
+let tipoCotizacionTemp = "item";
+let proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
 function renglonVacio(){ return {id:uid("R"), descripcion:"", cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:""}; }
 function renglonesDesdeCR(cr){
   const dets = detallesDe(cr);
@@ -2720,7 +2718,14 @@ function abrirModalSolicitud(crOrigen){
   }
   const esOrigenValido = typeof crOrigen==="string" && crOrigen;
   const origenFolio = esOrigenValido ? state.folios.find(f=>f.cr===crOrigen) : null;
-  if(origenFolio){
+  tipoCotizacionTemp = origenFolio ? (origenFolio.tipoCotizacion||"item") : "item";
+  if(origenFolio && tipoCotizacionTemp==="proyecto"){
+    const dOrigen = detallesDe(origenFolio.cr)[0];
+    proyectoTemp = dOrigen ? { nombre:dOrigen.descripcion||"", descripcionBreve:dOrigen.descripcionBreve||"", incluye:dOrigen.incluye||"", noIncluye:dOrigen.noIncluye||"" } : { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
+  } else {
+    proyectoTemp = { nombre:"", descripcionBreve:"", incluye:"", noIncluye:"" };
+  }
+  if(origenFolio && tipoCotizacionTemp==="item"){
     const copiados = renglonesDesdeCR(origenFolio.cr);
     renglonesTemp = copiados.length ? copiados : [renglonVacio()];
   } else {
@@ -2739,7 +2744,9 @@ function abrirModalSolicitud(crOrigen){
         selContacto.dispatchEvent(new Event("change"));
       }
     }
-    showToast("Se copiaron "+renglonesTemp.length+" renglón(es) de "+origenFolio.cr+" — revisa y ajusta antes de guardar.");
+    showToast(tipoCotizacionTemp==="proyecto"
+      ? "Se copiaron los datos del proyecto/servicio de "+origenFolio.cr+" — revisa y ajusta antes de guardar."
+      : "Se copiaron "+renglonesTemp.length+" renglón(es) de "+origenFolio.cr+" — revisa y ajusta antes de guardar.");
   }
   document.getElementById("modalSolicitud").classList.add("active");
 }
@@ -2780,17 +2787,69 @@ function renderRenglonesWrap(){
     });
   });
 }
+function renderCuerpoSolicitud(){
+  const wrap = document.getElementById("cuerpoSolicitudWrap");
+  if(!wrap) return;
+  if(tipoCotizacionTemp==="proyecto"){
+    wrap.innerHTML = `
+      <div class="field"><label>Nombre del servicio o proyecto</label><input id="pf_nombre" value="${proyectoTemp.nombre||""}"></div>
+      <div class="field"><label>Descripción breve</label><textarea id="pf_descBreve">${proyectoTemp.descripcionBreve||""}</textarea></div>
+      <div class="field"><label>Qué incluye</label><textarea id="pf_incluye" placeholder="Ej. Diseño, materiales, instalación, puesta en marcha...">${proyectoTemp.incluye||""}</textarea></div>
+      <div class="field"><label>Qué no incluye</label><textarea id="pf_noincluye" placeholder="Ej. Mantenimiento posterior, consumibles, permisos...">${proyectoTemp.noIncluye||""}</textarea></div>
+    `;
+    document.getElementById("pf_nombre").addEventListener("input", (e)=>{ proyectoTemp.nombre = e.target.value; });
+    document.getElementById("pf_descBreve").addEventListener("input", (e)=>{ proyectoTemp.descripcionBreve = e.target.value; });
+    document.getElementById("pf_incluye").addEventListener("input", (e)=>{ proyectoTemp.incluye = e.target.value; });
+    document.getElementById("pf_noincluye").addEventListener("input", (e)=>{ proyectoTemp.noIncluye = e.target.value; });
+  } else {
+    const crsConItems = state.folios.filter(f=>!esProyectoFolio(f) && detallesDe(f.cr).length>0);
+    const opcionesCopiar = crsConItems.map(f=>{
+      const c = clienteById(f.idCliente);
+      return `<option value="${f.cr}">${f.cr} — ${c?c.empresa:"(sin cliente)"} (${detallesDe(f.cr).length} item${detallesDe(f.cr).length>1?"s":""})</option>`;
+    }).join("");
+    wrap.innerHTML = `
+      ${crsConItems.length ? `
+      <div class="field" style="max-width:80%;">
+        <label>Copiar items de una CR existente <span class="hint">(opcional, reemplaza los renglones de abajo)</span></label>
+        <div style="display:flex; gap:8px;">
+          <select id="sf_copiarDeCR" style="flex:1;"><option value="">Selecciona una CR...</option>${opcionesCopiar}</select>
+          <button class="btn btn-outline btn-sm" type="button" id="sf_btnCopiarItems" style="width:auto; white-space:nowrap;">Copiar items</button>
+        </div>
+      </div>` : ""}
+      <div id="renglonesWrap"></div>
+      <button class="btn btn-outline btn-sm" id="btnAddRenglon">+ Agregar renglón (otro número de parte)</button>
+    `;
+    renderRenglonesWrap();
+    document.getElementById("btnAddRenglon").addEventListener("click", ()=>{
+      renglonesTemp.push(renglonVacio());
+      renderRenglonesWrap();
+    });
+    const btnCopiarItems = document.getElementById("sf_btnCopiarItems");
+    if(btnCopiarItems) btnCopiarItems.addEventListener("click", ()=>{
+      const crSel = document.getElementById("sf_copiarDeCR").value;
+      if(!crSel){ showToast("Selecciona de qué CR quieres copiar los items", true); return; }
+      const copiados = renglonesDesdeCR(crSel);
+      if(copiados.length===0){ showToast("Esa CR no tiene renglones capturados", true); return; }
+      renglonesTemp = copiados;
+      renderRenglonesWrap();
+      showToast(copiados.length+" renglón(es) copiado(s) de "+crSel+" — revisa y ajusta antes de guardar.");
+    });
+  }
+}
 function pintarFormSolicitud(){
   const empresas = empresasUnicas();
   const opcionesEmpresa = empresas.map(e=>`<option value="${e}">${e}</option>`).join("");
-  const crsConItems = state.folios.filter(f=>detallesDe(f.cr).length>0);
-  const opcionesCopiar = crsConItems.map(f=>{
-    const c = clienteById(f.idCliente);
-    return `<option value="${f.cr}">${f.cr} — ${c?c.empresa:"(sin cliente)"} (${detallesDe(f.cr).length} item${detallesDe(f.cr).length>1?"s":""})</option>`;
-  }).join("");
 
   document.getElementById("formSolicitud").innerHTML = `
     <div class="note">Folio a generar: <strong class="mono">${nextFolio()}</strong> &middot; Status inicial: <strong>Pendiente</strong></div>
+    <div class="field" style="max-width:60%;">
+      <label>Tipo de cotización</label>
+      <select id="sf_tipoCotizacion">
+        <option value="item" ${tipoCotizacionTemp==="item"?"selected":""}>Por item (artículos con número de parte)</option>
+        <option value="proyecto" ${tipoCotizacionTemp==="proyecto"?"selected":""}>Proyecto o servicio</option>
+      </select>
+      <span class="hint">No se puede cambiar después de guardar la solicitud.</span>
+    </div>
     <div class="grid-2">
       <div class="field"><label>Empresa / Cliente</label>
         <select id="sf_empresa"><option value="">Selecciona...</option>${opcionesEmpresa}</select>
@@ -2805,24 +2864,19 @@ function pintarFormSolicitud(){
     </div>
     <div class="field" style="max-width:48%;"><label>Fecha de solicitud</label><input type="date" id="sf_fecha" value="${todayISO()}"></div>
     <p class="small muted">¿La empresa o el contacto no existen todavía? <a href="#" id="sf_nuevoCliente">Agrégalo aquí</a> y regresa a este formulario.</p>
-    ${crsConItems.length ? `
-    <div class="field" style="max-width:80%;">
-      <label>Copiar items de una CR existente <span class="hint">(opcional, reemplaza los renglones de abajo)</span></label>
-      <div style="display:flex; gap:8px;">
-        <select id="sf_copiarDeCR" style="flex:1;"><option value="">Selecciona una CR...</option>${opcionesCopiar}</select>
-        <button class="btn btn-outline btn-sm" type="button" id="sf_btnCopiarItems" style="width:auto; white-space:nowrap;">Copiar items</button>
-      </div>
-    </div>` : ""}
     <div class="divider"></div>
-    <div id="renglonesWrap"></div>
-    <button class="btn btn-outline btn-sm" id="btnAddRenglon">+ Agregar renglón (otro número de parte)</button>
+    <div id="cuerpoSolicitudWrap"></div>
     <div class="flex-between" style="margin-top:18px;">
       <button class="btn btn-outline" id="sf_cancel">Cancelar</button>
       <button class="btn btn-primary" id="sf_save">Registrar solicitud</button>
     </div>
   `;
-  renderRenglonesWrap();
+  renderCuerpoSolicitud();
 
+  document.getElementById("sf_tipoCotizacion").addEventListener("change", (e)=>{
+    tipoCotizacionTemp = e.target.value;
+    renderCuerpoSolicitud();
+  });
   document.getElementById("sf_cancel").addEventListener("click", cerrarModales);
   document.getElementById("sf_nuevoCliente").addEventListener("click", (e)=>{ e.preventDefault(); abrirModalCliente(null); });
 
@@ -2848,26 +2902,16 @@ function pintarFormSolicitud(){
     document.getElementById("sf_telefono").value = cli ? (cli.telefono||"") : "";
   });
 
-  document.getElementById("btnAddRenglon").addEventListener("click", ()=>{
-    renglonesTemp.push(renglonVacio());
-    renderRenglonesWrap();
-  });
-  const btnCopiarItems = document.getElementById("sf_btnCopiarItems");
-  if(btnCopiarItems) btnCopiarItems.addEventListener("click", ()=>{
-    const crSel = document.getElementById("sf_copiarDeCR").value;
-    if(!crSel){ showToast("Selecciona de qué CR quieres copiar los items", true); return; }
-    const copiados = renglonesDesdeCR(crSel);
-    if(copiados.length===0){ showToast("Esa CR no tiene renglones capturados", true); return; }
-    renglonesTemp = copiados;
-    renderRenglonesWrap();
-    showToast(copiados.length+" renglón(es) copiado(s) de "+crSel+" — revisa y ajusta antes de guardar.");
-  });
   document.getElementById("sf_save").addEventListener("click", guardarNuevaSolicitud);
 }
 function guardarNuevaSolicitud(){
   const idCliente = document.getElementById("sf_contactoSel").value;
   if(!idCliente){ showToast("Selecciona empresa y contacto", true); return; }
-  if(renglonesTemp.some(r=>!r.descripcion.trim())){ showToast("Falta la descripción en algún renglón", true); return; }
+  if(tipoCotizacionTemp==="proyecto"){
+    if(!(proyectoTemp.nombre||"").trim()){ showToast("Escribe el nombre del servicio o proyecto", true); return; }
+  } else {
+    if(renglonesTemp.some(r=>!r.descripcion.trim())){ showToast("Falta la descripción en algún renglón", true); return; }
+  }
 
   const cli = clienteById(idCliente);
   const cr = nextFolio();
@@ -2877,22 +2921,32 @@ function guardarNuevaSolicitud(){
     contacto: cli?cli.contacto||"":"",
     correoContacto: document.getElementById("sf_correo").value.trim(),
     telContacto: document.getElementById("sf_telefono").value.trim(),
-    status: "Pendiente",
+    status: "Pendiente", tipoCotizacion: tipoCotizacionTemp,
     fechas: {}, noOC:"", notasGenerales:"", tipoCambio:18,
     cancelada:false, motivoCancelacion:"", fechaCancelacion:""
   };
   ensureFechas(folio);
   folio.fechas["Pendiente"] = fechaSolicitud;
   state.folios.push(folio);
-  renglonesTemp.forEach((r,i)=>{
+  if(tipoCotizacionTemp==="proyecto"){
     state.detalles.push({
-      cr, noRenglon:i+1, descripcion:r.descripcion.trim(), cantidad:N(r.cantidad)||1,
-      numeroParte:r.numeroParte.trim(), tiempoEntregaValor:r.tiempoEntregaValor, tiempoEntregaUnidad:r.tiempoEntregaUnidad||"días",
-      link:r.link.trim(), notas:r.notas.trim(),
+      cr, noRenglon:1, descripcion:proyectoTemp.nombre.trim(),
+      descripcionBreve:(proyectoTemp.descripcionBreve||"").trim(), incluye:(proyectoTemp.incluye||"").trim(), noIncluye:(proyectoTemp.noIncluye||"").trim(),
+      cantidad:1, numeroParte:"", tiempoEntregaValor:"", tiempoEntregaUnidad:"días", link:"", notas:"",
       costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"",
       otros:[], pctGanancia:""
     });
-  });
+  } else {
+    renglonesTemp.forEach((r,i)=>{
+      state.detalles.push({
+        cr, noRenglon:i+1, descripcion:r.descripcion.trim(), cantidad:N(r.cantidad)||1,
+        numeroParte:r.numeroParte.trim(), tiempoEntregaValor:r.tiempoEntregaValor, tiempoEntregaUnidad:r.tiempoEntregaUnidad||"días",
+        link:r.link.trim(), notas:r.notas.trim(),
+        costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"",
+        otros:[], pctGanancia:""
+      });
+    });
+  }
   cerrarModales(); markDirty();
   currentCR = cr; goto("detalle");
   showToast("Solicitud "+cr+" registrada");
@@ -2985,22 +3039,53 @@ function renderDetalle(){
   const mostrarFacturaPersistente = idx >= STATUS_FLOW.findIndex(s=>s.key==="Factura Generada") || (folio.status===CANCEL_KEY && folio.noFactura);
 
   const costosBloqueados = !puedeAgregarItems;
+  const esProyecto = esProyectoFolio(folio);
   const renglonesHtml = dets.map(d=>{
     const auto = ivaEsAuto(d);
     const sid = safeId(d.cr, d.noRenglon);
     const dis = costosBloqueados ? "disabled" : "";
-    return `<div class="renglon-box">
-      ${!costosBloqueados ? `<div class="rem" style="display:flex; gap:6px;">
-        <button class="btn btn-outline btn-sm" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>
-        ${dets.length>1 ? `<button class="btn btn-outline btn-sm" data-eliminaritem data-cr="${d.cr}" data-rn="${d.noRenglon}" title="Eliminar este renglón de la CR">&times; Eliminar</button>` : ""}
-      </div>` : ""}
+    const cabeceraHtml = esProyecto ? `
+      <div class="renglon-num">Detalle del proyecto / servicio</div>
+      <div class="grid-2">
+        <div>
+          <strong>${d.descripcion}</strong>
+          ${d.descripcionBreve ? `<div class="small muted" style="margin-top:4px;">${d.descripcionBreve}</div>` : ""}
+        </div>
+        <div class="right"><div class="money" id="precioFinalTop-${sid}">${money(precioFinalRenglon(d))}</div></div>
+      </div>
+      <div class="small" style="margin:10px 0; display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+        <div><strong>Incluye:</strong><div class="muted" style="margin-top:2px; white-space:pre-wrap;">${d.incluye?d.incluye:"<span class='muted'>(sin capturar)</span>"}</div></div>
+        <div><strong>No incluye:</strong><div class="muted" style="margin-top:2px; white-space:pre-wrap;">${d.noIncluye?d.noIncluye:"<span class='muted'>(sin capturar)</span>"}</div></div>
+      </div>
+      <div class="small muted" style="margin:6px 0;">${d.notas?("Notas: "+d.notas):""}</div>
+    ` : `
       <div class="renglon-num">Renglón ${d.noRenglon} &middot; ${d.numeroParte||"s/n"}</div>
       <div class="grid-2">
         <div><strong>${d.descripcion}</strong><div class="small muted">Entrega: ${tiempoEntregaTexto(d)} ${d.link?('&middot; <a href="'+d.link+'" target="_blank">link</a>'):""}</div></div>
         <div class="right"><div class="money" id="precioFinalTop-${sid}">${money(precioFinalRenglon(d))}</div><div class="small muted" id="precioUnitTop-${sid}">${money(precioUnitarioFinal(d))} c/u</div></div>
       </div>
       <div class="small muted" style="margin:6px 0;">${d.notas?("Notas: "+d.notas):""}</div>
-      ${costosBloqueados ? `<div class="note" style="margin-bottom:10px;">Costos bloqueados: la OC ya fue recibida. Usa "Regresar" en el status si de verdad necesitas corregir algo.</div>` : ""}
+    `;
+    const costoGridHtml = esProyecto ? `
+      <div class="grid-3">
+        <div class="field">
+          <label>Costo directo del proyecto <span class="hint">(materiales/insumos, sin IVA)</span></label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input id="costoArticuloInput-${sid}" data-cost="costoArticulo" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticulo}" placeholder="MXN" ${dis}>
+            <span class="small muted">o</span>
+            <input data-costusd data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.costoArticuloUSD||""}" placeholder="USD" ${dis}>
+          </div>
+          <span class="hint">USD × tipo de cambio (${money(N(folio.tipoCambio)||18)}) = MXN, o captura MXN directo</span>
+        </div>
+        <div class="field">
+          <label>IVA ($, total proyecto)</label>
+          <input id="ivaInput-${sid}" data-cost="iva" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${auto? ivaValue(d).toFixed(2) : d.iva}" ${(auto||costosBloqueados)?"disabled":""} placeholder="NA o monto">
+          <label class="checkbox-row"><input type="checkbox" data-ivaauto data-cr="${d.cr}" data-rn="${d.noRenglon}" ${auto?"checked":""} ${dis}> Automático (16%)</label>
+        </div>
+        <div class="kv" style="align-self:end;"><span class="k">Costo directo total</span><span class="v mono" id="costoArtTotal-${sid}">${money(costoArticuloTotal(d))}</span></div>
+      </div>
+      <div class="kv"><span class="k">Costo directo + IVA</span><span class="v mono" id="costoConIva-${sid}">${money(costoConIva(d)/(N(d.cantidad)||1))}</span></div>
+    ` : `
       <div class="grid-4">
         <div class="field"><label>Cantidad</label><input type="number" min="1" data-cost="cantidad" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.cantidad}" ${dis}></div>
         <div class="field">
@@ -3020,6 +3105,15 @@ function renderDetalle(){
         <div class="kv" style="align-self:end;"><span class="k">Costo artículo total <span id="cantLabel-${sid}">(x${d.cantidad})</span></span><span class="v mono" id="costoArtTotal-${sid}">${money(costoArticuloTotal(d))}</span></div>
       </div>
       <div class="kv"><span class="k">Costo artículo + IVA (por pieza)</span><span class="v mono" id="costoConIva-${sid}">${money(costoConIva(d)/(N(d.cantidad)||1))}</span></div>
+    `;
+    return `<div class="renglon-box">
+      ${!costosBloqueados ? `<div class="rem" style="display:flex; gap:6px;">
+        <button class="btn btn-outline btn-sm" data-editaritem data-cr="${d.cr}" data-rn="${d.noRenglon}">Editar datos</button>
+        ${(dets.length>1 && !esProyecto) ? `<button class="btn btn-outline btn-sm" data-eliminaritem data-cr="${d.cr}" data-rn="${d.noRenglon}" title="Eliminar este renglón de la CR">&times; Eliminar</button>` : ""}
+      </div>` : ""}
+      ${cabeceraHtml}
+      ${costosBloqueados ? `<div class="note" style="margin-bottom:10px;">Costos bloqueados: la OC ya fue recibida. Usa "Regresar" en el status si de verdad necesitas corregir algo.</div>` : ""}
+      ${costoGridHtml}
       <div class="grid-4">
         <div class="field"><label>Costo recolección <span class="hint">(lote)</span></label><input data-cost="recoleccion" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.recoleccion}" placeholder="NA o monto" ${dis}></div>
         <div class="field"><label>Costo entrega <span class="hint">(lote)</span></label><input data-cost="entrega" data-cr="${d.cr}" data-rn="${d.noRenglon}" value="${d.entrega}" placeholder="NA o monto" ${dis}></div>
@@ -3163,13 +3257,13 @@ function renderDetalle(){
 
     <div class="card">
       <div class="flex-between">
-        <h3>Renglones cotizados</h3>
+        <h3>${esProyecto ? "Proyecto / servicio cotizado" : "Renglones cotizados"}</h3>
         <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
           <div style="display:flex; align-items:center; gap:8px;">
             <label class="small muted" style="text-transform:none; font-weight:600; white-space:nowrap;">Tipo de cambio USD&rarr;MXN</label>
             <input id="inpTipoCambio" type="number" step="0.01" min="0" value="${folio.tipoCambio!==undefined&&folio.tipoCambio!==""?folio.tipoCambio:18}" style="width:90px;" ${costosBloqueados?"disabled":""}>
           </div>
-          ${puedeAgregarItems ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>`}
+          ${(!esProyecto && puedeAgregarItems) ? `<button class="btn btn-outline btn-sm" id="btnAgregarItem">+ Agregar item a esta CR</button>` : (!esProyecto ? `<span class="small muted">Ya no se pueden agregar items (folio en o después de "PO Recibida")</span>` : "")}
         </div>
       </div>
       ${renglonesHtml}
@@ -3524,6 +3618,33 @@ function abrirModalAgregarItem(folio){
    EDITAR DATOS INICIALES DE UN RENGLÓN YA EXISTENTE
    ========================================================================= */
 function abrirModalEditarItem(d){
+  const folio = state.folios.find(f=>f.cr===d.cr);
+  const esProyecto = esProyectoFolio(folio);
+  if(esProyecto){
+    document.getElementById("formEditarItem").innerHTML = `
+      <div class="field"><label>Nombre del servicio o proyecto</label><input id="ei_desc" value="${d.descripcion||""}"></div>
+      <div class="field"><label>Descripción breve</label><textarea id="ei_descBreve">${d.descripcionBreve||""}</textarea></div>
+      <div class="field"><label>Qué incluye</label><textarea id="ei_incluye">${d.incluye||""}</textarea></div>
+      <div class="field"><label>Qué no incluye</label><textarea id="ei_noincluye">${d.noIncluye||""}</textarea></div>
+      <div class="flex-between">
+        <button class="btn btn-outline" id="ei_cancel">Cancelar</button>
+        <button class="btn btn-primary" id="ei_save">Guardar cambios</button>
+      </div>
+    `;
+    document.getElementById("ei_cancel").addEventListener("click", cerrarModales);
+    document.getElementById("ei_save").addEventListener("click", ()=>{
+      const desc = document.getElementById("ei_desc").value.trim();
+      if(!desc){ showToast("Escribe el nombre del servicio o proyecto", true); return; }
+      d.descripcion = desc;
+      d.descripcionBreve = document.getElementById("ei_descBreve").value.trim();
+      d.incluye = document.getElementById("ei_incluye").value.trim();
+      d.noIncluye = document.getElementById("ei_noincluye").value.trim();
+      cerrarModales(); markDirty(); renderDetalle();
+      showToast("Datos del proyecto actualizados");
+    });
+    document.getElementById("modalEditarItem").classList.add("active");
+    return;
+  }
   document.getElementById("formEditarItem").innerHTML = `
     <div class="field"><label>Descripción del artículo</label><input id="ei_desc" value="${d.descripcion||""}"></div>
     <div class="grid-3">
@@ -3578,13 +3699,45 @@ function construirFilasItems(dets){
       <td align="right" style="padding:7px 6px;">${money(precioFinalRenglon(d))}</td>
     </tr>`).join("");
 }
+// Envuelve filas <tr> en la tabla estándar de partidas (encabezados fijos),
+// usada tanto por la propuesta de tipo "Por item" como por las PO a proveedores.
+function tablaItemsPdfWrap(filasHtml){
+  return `<table width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse; border:1px solid #dbe3ef; font-size:11px;">
+    <thead><tr style="background:#0f172a; color:#fff;"><th style="padding:8px 6px;">Partida</th><th style="padding:8px 6px;">Cantidad</th><th style="padding:8px 6px;">U.M.</th><th align="left" style="padding:8px 6px;">Concepto / Descripción</th><th style="padding:8px 6px;">Entrega</th><th align="right" style="padding:8px 6px;">P. Unitario</th><th align="right" style="padding:8px 6px;">Subtotal</th></tr></thead>
+    <tbody>${filasHtml}</tbody>
+  </table>`;
+}
+// Bloque para cotizaciones tipo "Proyecto/Servicio": nombre, descripción breve
+// y qué incluye/no incluye, en vez de la tabla de partidas (no aplica número de parte ni cantidad).
+function bloqueProyectoHtml(d){
+  const incluyeHtml = (d.incluye||"").trim() ? (d.incluye||"").replace(/\n/g,"<br/>") : "<span style='color:#94a3b8;'>No especificado</span>";
+  const noIncluyeHtml = (d.noIncluye||"").trim() ? (d.noIncluye||"").replace(/\n/g,"<br/>") : "<span style='color:#94a3b8;'>No especificado</span>";
+  return `
+    <div class="no-break" style="border:1px solid #dbe3ef; border-radius:11px; overflow:hidden;">
+      <div style="background:#0f172a; color:#fff; padding:10px 14px; font-size:13px; font-weight:800;">${d.descripcion||"Proyecto / Servicio"}</div>
+      ${(d.descripcionBreve||"").trim() ? `<div style="padding:10px 14px 0; font-size:12px; color:#334155; line-height:1.5;">${(d.descripcionBreve||"").replace(/\n/g,"<br/>")}</div>` : ""}
+      <table width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:6px;">
+        <tr>
+          <td style="width:50%; vertical-align:top; padding:10px 14px 14px;">
+            <div style="font-size:11px; font-weight:800; color:#145da0; text-transform:uppercase; margin-bottom:4px;">Incluye</div>
+            <div style="font-size:12px; color:#334155; line-height:1.5;">${incluyeHtml}</div>
+          </td>
+          <td style="width:50%; vertical-align:top; padding:10px 14px 14px;">
+            <div style="font-size:11px; font-weight:800; color:#94a3b8; text-transform:uppercase; margin-bottom:4px;">No incluye</div>
+            <div style="font-size:12px; color:#334155; line-height:1.5;">${noIncluyeHtml}</div>
+          </td>
+        </tr>
+      </table>
+    </div>`;
+}
 function construirHtmlPropuesta(folio, cli, dets){
+  const esProyecto = esProyectoFolio(folio);
   const subtotal = dets.reduce((s,d)=>s+precioFinalRenglon(d),0);
   const ivaPct = 0.16;
   const ivaMonto = subtotal*ivaPct;
   const total = subtotal+ivaMonto;
   const map = {
-    TituloDocumento: "COTIZACIÓN",
+    TituloDocumento: esProyecto ? "PROPUESTA DE PROYECTO / SERVICIO" : "COTIZACIÓN",
     EtiquetaFolio: "No. Cotización",
     TituloDestinatario: "DATOS DEL CLIENTE",
     EtiquetaDireccion: "Entrega en",
@@ -3599,10 +3752,10 @@ function construirHtmlPropuesta(folio, cli, dets){
     Telefono: folio.telContacto||"",
     EntregaEn: (cli && cli.direccion) ? cli.direccion : "-",
     FormaPago: state.config.formaPago || "-",
-    TiempoEntrega: tiempoEntregaGlobal(dets),
+    TiempoEntrega: esProyecto ? "Según cronograma del proyecto" : tiempoEntregaGlobal(dets),
     CondicionEntrega: state.config.condicionEntrega || "-",
     IVA: "16%",
-    ItemsTable: construirFilasItems(dets),
+    ItemsSection: esProyecto ? bloqueProyectoHtml(dets[0]) : tablaItemsPdfWrap(construirFilasItems(dets)),
     CondicionesComerciales: (state.config.condicionesComerciales || "Precios sujetos a cambio sin previo aviso.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
     DescuentoRow: "",
@@ -3615,11 +3768,11 @@ function construirHtmlPropuesta(folio, cli, dets){
   Object.keys(map).forEach(k=>{ html = html.split("{{"+k+"}}").join(String(map[k])); });
   return html;
 }
-function validarPropuestaCompleta(dets){
+function validarPropuestaCompleta(dets, esProyecto){
   if(dets.some(d=>N(precioFinalRenglon(d))<=0)){
     showToast("Falta capturar costos/ganancia en algún renglón", true); return false;
   }
-  if(dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
+  if(!esProyecto && dets.some(d=>!d.tiempoEntregaValor || N(d.tiempoEntregaValor)<=0)){
     showToast("Falta capturar el tiempo de entrega en algún renglón (usa \"Editar datos\" en ese renglón)", true); return false;
   }
   return true;
@@ -3663,7 +3816,7 @@ async function construirPropuestaPdfBlob(folio, cli, dets){
   return pdf.output("blob");
 }
 async function generarPropuestaPDF(folio, cli, dets){
-  if(!validarPropuestaCompleta(dets)) return;
+  if(!validarPropuestaCompleta(dets, esProyectoFolio(folio))) return;
   const qt = qtFolio(folio.cr);
   showToast("Generando PDF...");
   try{
@@ -3727,7 +3880,7 @@ function construirHtmlPO(po, proveedor, folio){
     TiempoEntrega: po.tiempoEntrega || "-",
     CondicionEntrega: po.condicionEntrega || "-",
     IVA: ivaPct+"%",
-    ItemsTable: construirFilasItemsPO(po.items, moneda),
+    ItemsSection: tablaItemsPdfWrap(construirFilasItemsPO(po.items, moneda)),
     CondicionesComerciales: (po.notas || "Favor de confirmar recepción y tiempo de entrega de esta orden de compra.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
     DescuentoRow: descuentoPct>0 ? `<tr><td style="padding:5px 0; color:#64748b;">Descuento (${descuentoPct}%):</td><td align="right" style="padding:5px 0; font-weight:700; color:#b91c1c;">-${money(descuentoMonto)}</td></tr>` : "",
@@ -3924,14 +4077,24 @@ function abrirModalPO(folio){
   document.getElementById("modalPO").classList.add("active");
 }
 
-function tablaItemsPlano(dets){
+function tablaItemsPlano(dets, esProyecto){
+  if(esProyecto){
+    const d = dets[0] || {};
+    return (d.descripcion||"Proyecto/Servicio")+"\n"+
+      ((d.descripcionBreve||"").trim() ? d.descripcionBreve+"\n\n" : "\n")+
+      "Incluye:\n"+((d.incluye||"").trim()||"No especificado")+"\n\n"+
+      "No incluye:\n"+((d.noIncluye||"").trim()||"No especificado");
+  }
   return dets.map(d=>
     "Partida "+d.noRenglon+"\n"+
     "  Concepto: "+d.descripcion+(d.numeroParte?(" ("+d.numeroParte+")"):"")+"\n"+
     "  Cantidad: "+d.cantidad+"   U.M.: PZA   Entrega: "+tiempoEntregaTexto(d)
   ).join("\n\n");
 }
-function tablaItemsHtml(dets){
+function tablaItemsHtml(dets, esProyecto){
+  if(esProyecto){
+    return bloqueProyectoHtml(dets[0] || {});
+  }
   const filas = dets.map(d=>`
     <tr>
       <td style="padding:6px 10px; border:1px solid #dbe3ef; text-align:center;">${d.noRenglon}</td>
@@ -3966,20 +4129,21 @@ async function copiarHtmlAlPortapapeles(html, textoPlano){
 }
 function construirCorreoPropuesta(folio, dets){
   const qt = qtFolio(folio.cr);
+  const esProyecto = esProyectoFolio(folio);
   const subject = "Propuesta de cotización "+qt;
 
   const bodyPlano =
     "Estimado(a) "+(folio.contacto||"")+",\n\n"+
-    "Adjunto encontrará nuestra propuesta "+qt+" correspondiente a su solicitud "+folio.cr+". A continuación un resumen de las partidas cotizadas:\n\n"+
-    tablaItemsPlano(dets) + "\n\n"+
+    "Adjunto encontrará nuestra propuesta "+qt+" correspondiente a su solicitud "+folio.cr+". A continuación un resumen:\n\n"+
+    tablaItemsPlano(dets, esProyecto) + "\n\n"+
     "Quedamos atentos a sus comentarios.\n\n"+
     "Atentamente,\nAMD Business Services\n"+(state.config.empresaCorreo||"");
 
   const bodyHtml = `
     <div style="font-family:Arial,sans-serif; font-size:13px; color:#1f2937;">
       <p>Estimado(a) ${folio.contacto||""},</p>
-      <p>Adjunto encontrará nuestra propuesta <strong>${qt}</strong> correspondiente a su solicitud ${folio.cr}. A continuación un resumen de las partidas cotizadas:</p>
-      ${tablaItemsHtml(dets)}
+      <p>Adjunto encontrará nuestra propuesta <strong>${qt}</strong> correspondiente a su solicitud ${folio.cr}. A continuación un resumen:</p>
+      ${tablaItemsHtml(dets, esProyecto)}
       <p>Quedamos atentos a sus comentarios.</p>
       <p style="margin-top:18px;">Atentamente,<br /><strong>AMD Business Services</strong><br />${state.config.empresaCorreo||""} ${state.config.empresaTelefono?(" | "+state.config.empresaTelefono):""}</p>
       ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services" style="height:34px; margin-top:8px;">`:""}
@@ -4001,7 +4165,7 @@ function prepararCorreo(folio, cli, dets){
 async function enviarCorreoPropuestaAMDServicio(folio, cli, dets){
   const destino = (folio.correoContacto||"").trim();
   if(!destino){ showToast("Esta CR no tiene correo de contacto capturado", true); return; }
-  if(!validarPropuestaCompleta(dets)) return;
+  if(!validarPropuestaCompleta(dets, esProyectoFolio(folio))) return;
 
   let token;
   try{
@@ -4377,6 +4541,7 @@ function importarWorkbook(wb){
         cancelada:(status===CANCEL_KEY),
         motivoCancelacion:col(r,map,"Motivo Cancelación"), fechaCancelacion:excelSerialToISO(col(r,map,"Fecha Cancelación")),
         tipoCambio: (col(r,map,"Tipo de Cambio USD")!=="") ? N(col(r,map,"Tipo de Cambio USD")) : 18,
+        tipoCotizacion: col(r,map,"Tipo de Cotización")||"item",
         fechas:{}
       };
       ensureFechas(folio);
@@ -4416,7 +4581,8 @@ function importarWorkbook(wb){
         ivaAuto:(ivaAutoRaw===true||ivaAutoRaw==="TRUE"), iva:col(r,map,"IVA Artículo ($)"),
         recoleccion:col(r,map,"Costo Recolección"), entrega:col(r,map,"Costo Entrega"),
         empaque:col(r,map,"Empaque"), manoObra:col(r,map,"Mano de Obra"),
-        otros, pctGanancia:(col(r,map,"% Ganancia")!=="") ? N(col(r,map,"% Ganancia"))*100 : ""
+        otros, pctGanancia:(col(r,map,"% Ganancia")!=="") ? N(col(r,map,"% Ganancia"))*100 : "",
+        descripcionBreve:col(r,map,"Descripción Breve")||"", incluye:col(r,map,"Qué Incluye")||"", noIncluye:col(r,map,"Qué No Incluye")||""
       });
     });
   }
@@ -4581,7 +4747,7 @@ const ENC_HEADERS_CR = ["CR (folio)","Fecha Solicitud","ID_Cliente","Empresa / C
   "Teléfono Contacto","Status","Siguiente Paso","Costo Total Final Cliente","Total Final con IVA","Utilidad Planeada","Utilidad Real","QT (folio propuesta)",
   "Fecha Esperando Cotización","Fecha Cotización Recibida","Fecha Propuesta Enviada","No. OC Cliente","No. de Factura","Fecha OC Recibida","Fecha Material Solicitado","Fecha Factura Generada","Fecha Material Entregado","Fecha Factura Enviada","Días de Crédito",
   "Fecha Probable de Pago","Fecha Pago Recibido","Fecha Complemento Generado",
-  "Fecha Finalizada","Notas Generales","Fecha Seguimiento","Nota Seguimiento","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD"];
+  "Fecha Finalizada","Notas Generales","Fecha Seguimiento","Nota Seguimiento","Motivo Cancelación","Fecha Cancelación","Tipo de Cambio USD","Tipo de Cotización"];
 function filaFolioExcel(f){
   ensureFechas(f);
   const cli = clienteById(f.idCliente);
@@ -4592,19 +4758,21 @@ function filaFolioExcel(f){
     f.fechas["Esperando Cotización"], f.fechas["Cotización Recibida"], f.fechas["Propuesta Enviada"],
     f.noOC, f.noFactura||"", f.fechas["PO Recibida"], f.fechas["Material Solicitado"], f.fechas["Factura Generada"], f.fechas["Material Entregado"], f.fechas["Factura Enviada"], diasCreditoDe(f), fpp||"",
     f.fechas["Pago Recibido"], f.fechas["Complemento Generado"],
-    f.fechas["Finalizada"], f.notasGenerales, f.fechaSeguimiento||"", f.notaSeguimiento||"", f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18];
+    f.fechas["Finalizada"], f.notasGenerales, f.fechaSeguimiento||"", f.notaSeguimiento||"", f.motivoCancelacion||"", f.fechaCancelacion||"", N(f.tipoCambio)||18, f.tipoCotizacion||"item"];
 }
 const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo","Cantidad","Número de Parte",
   "Tiempo de Entrega (valor)","Tiempo de Entrega (unidad)","Link","Notas",
   "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
   "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
-  "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)"];
+  "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)",
+  "Descripción Breve","Qué Incluye","Qué No Incluye"];
 function filaDetalleExcel(d){
   return [d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
     d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
     d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
     (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
-    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d)];
+    costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d),
+    d.descripcionBreve||"", d.incluye||"", d.noIncluye||""];
 }
 function exportarWorkbook(){
   const wb = XLSX.utils.book_new();
