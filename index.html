@@ -1296,7 +1296,9 @@ function wirePegarImagenesPendientes(containerEl, imagenesArray){
 }
 // Modo "inmediato": para usarse cuando el folio ya existe (p.ej. modal "Editar datos"):
 // cada imagen pegada se sube de inmediato a los adjuntos de la CR.
-function wirePegarImagenesInmediato(containerEl, folioCR){
+// d: el detalle (renglón) del proyecto/servicio al que se le están pegando imágenes — se usa para
+// recordar los nombres de archivo subidos (d.imagenesPropuesta) y así poder incluirlas en el PDF/correo.
+function wirePegarImagenesInmediato(containerEl, folioCR, d){
   containerEl.innerHTML = `
     <div tabindex="0" class="paste-zone" style="border:1px dashed #cbd5e1; border-radius:8px; padding:10px; outline:none; cursor:text;">
       <div class="small muted" data-pastehint>Haz clic aquí y presiona Ctrl+V para pegar una imagen y subirla directo a esta CR</div>
@@ -1319,9 +1321,14 @@ function wirePegarImagenesInmediato(containerEl, folioCR){
     if(files.length===0) return;
     hint.textContent = "Subiendo imagen(es)...";
     await subirAdjuntosCR(folioCR, files);
+    if(d){
+      if(!d.imagenesPropuesta) d.imagenesPropuesta = [];
+      files.forEach(f=>d.imagenesPropuesta.push(f.name));
+      markDirty();
+    }
     adjuntosCache.delete(folioCR);
     if(currentCR===folioCR) cargarYRenderAdjuntos(folioCR);
-    hint.textContent = "Haz clic aquí y presiona Ctrl+V para pegar una imagen y subirla directo a esta CR";
+    hint.textContent = "Haz clic aquí y presiona Ctrl+V para pegar una imagen y subirla directo a esta CR — se incluirán en el PDF de la propuesta";
   });
 }
 async function guardarNotaRemisionBlob(folioCR, blob, filename){
@@ -3019,15 +3026,19 @@ function guardarNuevaSolicitud(){
   folio.fechas["Pendiente"] = fechaSolicitud;
   state.folios.push(folio);
   if(tipoCotizacionTemp==="proyecto"){
-    state.detalles.push({
+    const detalleProyecto = {
       cr, noRenglon:1, descripcion:proyectoTemp.nombre.trim(),
       descripcionBreve:(proyectoTemp.descripcionBreve||"").trim(), incluye:(proyectoTemp.incluye||"").trim(), noIncluye:(proyectoTemp.noIncluye||"").trim(),
       cantidad:1, numeroParte:"", tiempoEntregaValor:proyectoTemp.tiempoEntregaValor||"", tiempoEntregaUnidad:proyectoTemp.tiempoEntregaUnidad||"días", link:"", notas:"",
       costoArticulo:"", costoArticuloUSD:"", ivaAuto:true, iva:"", recoleccion:"", entrega:(calcularCostoEntregaE()||"")+"", empaque:"", manoObra:"",
-      otros:[], pctGanancia:""
-    });
+      otros:[], pctGanancia:"", imagenesPropuesta:[]
+    };
+    state.detalles.push(detalleProyecto);
     const imagenesPendientes = (proyectoTemp.imagenes||[]).map(img=>img.file).filter(Boolean);
     if(imagenesPendientes.length){
+      // Se recuerdan los nombres de inmediato (para que el PDF/correo las incluya desde ahora);
+      // la subida real a OneDrive sigue en segundo plano.
+      detalleProyecto.imagenesPropuesta = imagenesPendientes.map(f=>f.name);
       subirAdjuntosCR(cr, imagenesPendientes).then(()=>{
         adjuntosCache.delete(cr);
         if(currentCR===cr) cargarYRenderAdjuntos(cr);
@@ -3741,7 +3752,7 @@ function abrirModalEditarItem(d){
         <button class="btn btn-primary" id="ei_save">Guardar cambios</button>
       </div>
     `;
-    if(cuentaActiva) wirePegarImagenesInmediato(document.getElementById("ei_imagenesWrap"), d.cr);
+    if(cuentaActiva) wirePegarImagenesInmediato(document.getElementById("ei_imagenesWrap"), d.cr, d);
     else document.getElementById("ei_imagenesWrap").innerHTML = `<p class="small muted">Inicia sesión con Microsoft para adjuntar imágenes a esta CR.</p>`;
     document.getElementById("ei_cancel").addEventListener("click", cerrarModales);
     document.getElementById("ei_save").addEventListener("click", ()=>{
@@ -3821,11 +3832,60 @@ function tablaItemsPdfWrap(filasHtml){
     <tbody>${filasHtml}</tbody>
   </table>`;
 }
-// Bloque para cotizaciones tipo "Proyecto/Servicio": nombre, descripción breve
-// y qué incluye/no incluye, en vez de la tabla de partidas (no aplica número de parte ni cantidad).
-function bloqueProyectoHtml(d){
+// Descarga (vía Microsoft Graph) las imágenes de referencia que se pegaron para un proyecto/servicio
+// (ver d.imagenesPropuesta, nombres de archivo dentro de "Adjuntos CRs/<folio>") y las regresa ya
+// convertidas a data: URI listas para insertarse como <img> en el PDF/correo de la propuesta.
+// Si algo falla (sin sesión, archivo ya no existe, etc.) regresa un arreglo vacío sin tronar.
+async function imagenesPropuestaDataUrls(d){
+  const nombres = (d.imagenesPropuesta||[]).filter(Boolean);
+  if(!nombres.length) return [];
+  try{
+    const adjuntos = await listarAdjuntosCR(d.cr);
+    const token = await obtenerTokenGraph();
+    if(!token) return [];
+    const out = [];
+    for(const nombre of nombres){
+      const item = adjuntos.find(a=>a.name===nombre);
+      if(!item) continue;
+      try{
+        const res = await fetch(`https://graph.microsoft.com/v1.0/drives/${item.driveId}/items/${item.id}/content`, {
+          headers: { "Authorization":"Bearer "+token }
+        });
+        if(!res.ok) continue;
+        const blob = await res.blob();
+        const dataUrl = await new Promise((resolve, reject)=>{
+          const reader = new FileReader();
+          reader.onloadend = ()=>resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        out.push(dataUrl);
+      }catch(err){ console.error(err); }
+    }
+    return out;
+  }catch(err){ console.error(err); return []; }
+}
+// Bloque HTML con las imágenes de referencia de un proyecto/servicio (si tiene), para insertarse
+// debajo del bloque de Incluye/No incluye tanto en el PDF de la propuesta como en el correo.
+async function imagenesPropuestaHtml(d){
+  const urls = await imagenesPropuestaDataUrls(d);
+  if(!urls.length) return "";
+  const ancho = urls.length>1 ? "180px" : "100%";
+  return `
+    <div class="no-break" style="margin-top:10px; border:1px solid #dbe3ef; border-radius:11px; overflow:hidden;">
+      <div style="background:#f1f5f9; color:#334155; padding:8px 14px; font-size:11px; font-weight:800; text-transform:uppercase;">Imágenes de referencia</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; padding:10px 14px;">
+        ${urls.map(src=>`<img src="${src}" style="max-width:${ancho}; max-height:220px; border:1px solid #e2e8f0; border-radius:6px; object-fit:cover;">`).join("")}
+      </div>
+    </div>`;
+}
+// Bloque para cotizaciones tipo "Proyecto/Servicio": nombre, descripción breve,
+// qué incluye/no incluye e imágenes de referencia, en vez de la tabla de partidas
+// (no aplica número de parte ni cantidad).
+async function bloqueProyectoHtml(d){
   const incluyeHtml = (d.incluye||"").trim() ? (d.incluye||"").replace(/\n/g,"<br/>") : "<span style='color:#94a3b8;'>No especificado</span>";
   const noIncluyeHtml = (d.noIncluye||"").trim() ? (d.noIncluye||"").replace(/\n/g,"<br/>") : "<span style='color:#94a3b8;'>No especificado</span>";
+  const imagenesHtml = await imagenesPropuestaHtml(d);
   return `
     <div class="no-break" style="border:1px solid #dbe3ef; border-radius:11px; overflow:hidden;">
       <div style="background:#0f172a; color:#fff; padding:10px 14px; font-size:13px; font-weight:800;">${d.descripcion||"Proyecto / Servicio"}</div>
@@ -3842,9 +3902,10 @@ function bloqueProyectoHtml(d){
           </td>
         </tr>
       </table>
-    </div>`;
+    </div>
+    ${imagenesHtml}`;
 }
-function construirHtmlPropuesta(folio, cli, dets){
+async function construirHtmlPropuesta(folio, cli, dets){
   const esProyecto = esProyectoFolio(folio);
   const subtotal = dets.reduce((s,d)=>s+precioFinalRenglon(d),0);
   const ivaPct = 0.16;
@@ -3869,7 +3930,7 @@ function construirHtmlPropuesta(folio, cli, dets){
     TiempoEntrega: tiempoEntregaGlobal(dets),
     CondicionEntrega: state.config.condicionEntrega || "-",
     IVA: "16%",
-    ItemsSection: esProyecto ? bloqueProyectoHtml(dets[0]) : tablaItemsPdfWrap(construirFilasItems(dets)),
+    ItemsSection: esProyecto ? await bloqueProyectoHtml(dets[0]) : tablaItemsPdfWrap(construirFilasItems(dets)),
     CondicionesComerciales: (state.config.condicionesComerciales || "Precios sujetos a cambio sin previo aviso.").replace(/\n/g,"<br/>"),
     Subtotal: money(subtotal),
     DescuentoRow: "",
@@ -3892,7 +3953,7 @@ function validarPropuestaCompleta(dets, esProyecto){
   return true;
 }
 async function construirPropuestaPdfBlob(folio, cli, dets){
-  const htmlDoc = construirHtmlPropuesta(folio, cli, dets);
+  const htmlDoc = await construirHtmlPropuesta(folio, cli, dets);
   const iframe = document.createElement("iframe");
   iframe.style.position = "fixed";
   iframe.style.left = "-99999px";
@@ -4205,9 +4266,9 @@ function tablaItemsPlano(dets, esProyecto){
     "  Cantidad: "+d.cantidad+"   U.M.: PZA   Entrega: "+tiempoEntregaTexto(d)
   ).join("\n\n");
 }
-function tablaItemsHtml(dets, esProyecto){
+async function tablaItemsHtml(dets, esProyecto){
   if(esProyecto){
-    return bloqueProyectoHtml(dets[0] || {});
+    return await bloqueProyectoHtml(dets[0] || {});
   }
   const filas = dets.map(d=>`
     <tr>
@@ -4241,7 +4302,7 @@ async function copiarHtmlAlPortapapeles(html, textoPlano){
   }catch(err){ console.error(err); }
   return false;
 }
-function construirCorreoPropuesta(folio, dets){
+async function construirCorreoPropuesta(folio, dets){
   const qt = qtFolio(folio.cr);
   const esProyecto = esProyectoFolio(folio);
   const subject = "Propuesta de cotización "+qt;
@@ -4257,7 +4318,7 @@ function construirCorreoPropuesta(folio, dets){
     <div style="font-family:Arial,sans-serif; font-size:13px; color:#1f2937;">
       <p>Estimado(a) ${folio.contacto||""},</p>
       <p>Adjunto encontrará nuestra propuesta <strong>${qt}</strong> correspondiente a su solicitud ${folio.cr}. A continuación un resumen:</p>
-      ${tablaItemsHtml(dets, esProyecto)}
+      ${await tablaItemsHtml(dets, esProyecto)}
       <p>Quedamos atentos a sus comentarios.</p>
       <p style="margin-top:18px;">Atentamente,<br /><strong>AMD Business Services</strong><br />${state.config.empresaCorreo||""} ${state.config.empresaTelefono?(" | "+state.config.empresaTelefono):""}</p>
       ${LOGO_DATA_URI?`<img src="${LOGO_DATA_URI}" alt="AMD Business Services" style="height:34px; margin-top:8px;">`:""}
@@ -4265,8 +4326,8 @@ function construirCorreoPropuesta(folio, dets){
 
   return { qt, subject, bodyPlano, bodyHtml };
 }
-function prepararCorreo(folio, cli, dets){
-  const { subject, bodyPlano, bodyHtml } = construirCorreoPropuesta(folio, dets);
+async function prepararCorreo(folio, cli, dets){
+  const { subject, bodyPlano, bodyHtml } = await construirCorreoPropuesta(folio, dets);
 
   copiarHtmlAlPortapapeles(bodyHtml, bodyPlano).then(ok=>{
     if(ok) showToast("Correo abierto y copiamos una versión con tabla y logo — pégala (Ctrl+V) sobre el cuerpo si quieres esa versión formateada.");
@@ -4287,13 +4348,13 @@ async function enviarCorreoPropuestaAMDServicio(folio, cli, dets){
   }catch(err){
     console.error(err);
     showToast("No se pudo iniciar sesión con "+CORREO_ENVIO_PROPUESTAS+". Se abrirá un borrador de correo en su lugar.", true);
-    prepararCorreo(folio, cli, dets);
+    await prepararCorreo(folio, cli, dets);
     return;
   }
 
   showToast("Generando PDF y enviando correo desde "+CORREO_ENVIO_PROPUESTAS+"...");
   try{
-    const { qt, subject, bodyHtml } = construirCorreoPropuesta(folio, dets);
+    const { qt, subject, bodyHtml } = await construirCorreoPropuesta(folio, dets);
     const pdfBlob = await construirPropuestaPdfBlob(folio, cli, dets);
     const pdfBase64 = await blobToBase64(pdfBlob);
 
@@ -4323,7 +4384,7 @@ async function enviarCorreoPropuestaAMDServicio(folio, cli, dets){
   }catch(err){
     console.error(err);
     showToast("No se pudo enviar el correo desde "+CORREO_ENVIO_PROPUESTAS+". Se abrirá un borrador en su lugar.", true);
-    prepararCorreo(folio, cli, dets);
+    await prepararCorreo(folio, cli, dets);
   }
 }
 const FACTURA_EMAIL_DESTINO = "facturasmeq@cranepi.com";
@@ -4696,7 +4757,8 @@ function importarWorkbook(wb){
         recoleccion:col(r,map,"Costo Recolección"), entrega:col(r,map,"Costo Entrega"),
         empaque:col(r,map,"Empaque"), manoObra:col(r,map,"Mano de Obra"),
         otros, pctGanancia:(col(r,map,"% Ganancia")!=="") ? N(col(r,map,"% Ganancia"))*100 : "",
-        descripcionBreve:col(r,map,"Descripción Breve")||"", incluye:col(r,map,"Qué Incluye")||"", noIncluye:col(r,map,"Qué No Incluye")||""
+        descripcionBreve:col(r,map,"Descripción Breve")||"", incluye:col(r,map,"Qué Incluye")||"", noIncluye:col(r,map,"Qué No Incluye")||"",
+        imagenesPropuesta: (()=>{ try{ const v = JSON.parse(col(r,map,"Imágenes Propuesta (JSON)")||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } })()
       });
     });
   }
@@ -4879,14 +4941,14 @@ const DET_HEADERS_CR = ["CR (folio)","No. Renglón","Descripción del Artículo"
   "Costo Artículo USD","Costo Artículo sin IVA","IVA Artículo ($)","Costo Artículo con IVA","Costo Recolección",
   "Costo Entrega","Empaque","Mano de Obra","Otros Costos - Descripción","Otros Costos - Monto Total",
   "Costo Total del Renglón","% Ganancia","Precio Unitario Final","Precio Final al Cliente","Utilidad","IVA Automático (16%)",
-  "Descripción Breve","Qué Incluye","Qué No Incluye"];
+  "Descripción Breve","Qué Incluye","Qué No Incluye","Imágenes Propuesta (JSON)"];
 function filaDetalleExcel(d){
   return [d.cr, d.noRenglon, d.descripcion, d.cantidad, d.numeroParte,
     d.tiempoEntregaValor||"", d.tiempoEntregaUnidad||"días", d.link, d.notas,
     d.costoArticuloUSD||"", d.costoArticulo, ivaValue(d), costoConIva(d), d.recoleccion, d.entrega, d.empaque, d.manoObra,
     (d.otros||[]).map(o=>o.desc).filter(Boolean).join("; "), otrosTotal(d),
     costoTotalRenglon(d), (N(d.pctGanancia)/100), precioUnitarioFinal(d), precioFinalRenglon(d), utilidadRenglon(d), ivaEsAuto(d),
-    d.descripcionBreve||"", d.incluye||"", d.noIncluye||""];
+    d.descripcionBreve||"", d.incluye||"", d.noIncluye||"", JSON.stringify(d.imagenesPropuesta||[])];
 }
 function exportarWorkbook(){
   const wb = XLSX.utils.book_new();
