@@ -3952,8 +3952,41 @@ function validarPropuestaCompleta(dets, esProyecto){
   }
   return true;
 }
-async function construirPropuestaPdfBlob(folio, cli, dets){
-  const htmlDoc = await construirHtmlPropuesta(folio, cli, dets);
+// Evita que un bloque marcado como "no-break" (tarjetas de datos, el bloque de Incluye/No incluye,
+// las imágenes de referencia, etc.) quede cortado justo en el límite entre una hoja y la siguiente.
+// El PDF se arma tomando UNA sola "foto" (html2canvas) de todo el documento y luego rebanando esa
+// foto en pedazos del alto de una hoja carta — una rebanada mecánica que no sabe dónde empieza o
+// termina cada elemento, así que un bloque que cae justo en el límite se parte a la mitad (esto es
+// lo que pasaba con las imágenes pegadas en una propuesta de proyecto/servicio). Para evitarlo,
+// antes de tomar la foto se mide cada bloque "no-break": si cruza el límite de una hoja, se inserta
+// un espaciador invisible justo antes para empujarlo completo a la siguiente hoja.
+function evitarCortesDePagina(target, pageHeightPx){
+  const pageTop = target.getBoundingClientRect().top;
+  const bloques = Array.from(target.querySelectorAll(".no-break"));
+  bloques.forEach(el=>{
+    const rect = el.getBoundingClientRect();
+    const top = rect.top - pageTop;
+    const bottom = rect.bottom - pageTop;
+    const altura = bottom - top;
+    if(altura >= pageHeightPx) return; // no cabe completo en una hoja: no hay forma de evitar el corte
+    const paginaInicio = Math.floor(top / pageHeightPx);
+    const paginaFin = Math.floor((bottom - 1) / pageHeightPx);
+    if(paginaInicio !== paginaFin){
+      const inicioSiguientePagina = (paginaInicio + 1) * pageHeightPx;
+      const empuje = inicioSiguientePagina - top;
+      if(empuje > 0){
+        const spacer = target.ownerDocument.createElement("div");
+        spacer.style.height = empuje + "px";
+        el.parentNode.insertBefore(spacer, el);
+      }
+    }
+  });
+}
+// Renderiza un documento HTML (string) como PDF tamaño carta, usando html2canvas + jsPDF,
+// con la corrección de evitarCortesDePagina() para que los bloques "no-break" no se partan
+// entre hojas. `selector` es el contenedor raíz del documento dentro de la plantilla (".page"
+// para propuestas/POs, ".box" para la nota de remisión).
+async function renderHtmlAPdfBlob(htmlDoc, selector){
   const iframe = document.createElement("iframe");
   iframe.style.position = "fixed";
   iframe.style.left = "-99999px";
@@ -3966,7 +3999,11 @@ async function construirPropuestaPdfBlob(folio, cli, dets){
     iframe.srcdoc = htmlDoc;
   });
   await new Promise(r=>setTimeout(r, 80));
-  const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
+  const target = iframe.contentDocument.querySelector(selector) || iframe.contentDocument.body;
+  // 612x792pt es el tamaño carta en puntos; esto da el alto de una hoja en los mismos
+  // píxeles en los que está medido "target" (antes del factor scale:2 de html2canvas).
+  const pageHeightPx = target.getBoundingClientRect().width * (792/612);
+  evitarCortesDePagina(target, pageHeightPx);
   const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
   document.body.removeChild(iframe);
 
@@ -3979,7 +4016,7 @@ async function construirPropuestaPdfBlob(folio, cli, dets){
   const imgHeight = canvas.height * imgWidth / canvas.width;
   let heightLeft = imgHeight;
   let position = 0;
-  const TOLERANCIA = 12; // pt: evita una 2a hoja casi en blanco por redondeo
+  const TOLERANCIA = 12; // pt: evita una hoja extra casi en blanco por redondeo
   pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
   heightLeft -= pageHeight;
   while(heightLeft > TOLERANCIA){
@@ -3989,6 +4026,10 @@ async function construirPropuestaPdfBlob(folio, cli, dets){
     heightLeft -= pageHeight;
   }
   return pdf.output("blob");
+}
+async function construirPropuestaPdfBlob(folio, cli, dets){
+  const htmlDoc = await construirHtmlPropuesta(folio, cli, dets);
+  return renderHtmlAPdfBlob(htmlDoc, ".page");
 }
 async function generarPropuestaPDF(folio, cli, dets){
   if(!validarPropuestaCompleta(dets, esProyectoFolio(folio))) return;
@@ -4072,41 +4113,7 @@ async function generarPOPDF(po, proveedor, folio){
   showToast("Generando PDF de la PO...");
   try{
     const htmlDoc = construirHtmlPO(po, proveedor, folio);
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.left = "-99999px";
-    iframe.style.top = "0";
-    iframe.style.width = "850px";
-    iframe.style.height = "1100px";
-    document.body.appendChild(iframe);
-    await new Promise(resolve=>{
-      iframe.onload = resolve;
-      iframe.srcdoc = htmlDoc;
-    });
-    await new Promise(r=>setTimeout(r, 80));
-    const target = iframe.contentDocument.querySelector(".page") || iframe.contentDocument.body;
-    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
-    document.body.removeChild(iframe);
-
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({unit:"pt", format:"letter"});
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = canvas.height * imgWidth / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
-    const TOLERANCIA = 12;
-    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    while(heightLeft > TOLERANCIA){
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-    const pdfBlob = pdf.output("blob");
+    const pdfBlob = await renderHtmlAPdfBlob(htmlDoc, ".page");
     await guardarPOBlob(folio.cr, pdfBlob, po.folio+".pdf");
     showToast("PO "+po.folio+" generada");
   }catch(err){
@@ -4567,41 +4574,7 @@ async function generarNotaRemisionPDF(folio, cli, dets){
   showToast("Generando PDF de la nota de remisión...");
   try{
     const htmlDoc = construirHtmlNotaRemision(folio, cli, dets);
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.left = "-99999px";
-    iframe.style.top = "0";
-    iframe.style.width = "850px";
-    iframe.style.height = "1100px";
-    document.body.appendChild(iframe);
-    await new Promise(resolve=>{
-      iframe.onload = resolve;
-      iframe.srcdoc = htmlDoc;
-    });
-    await new Promise(r=>setTimeout(r, 80));
-    const target = iframe.contentDocument.querySelector(".box") || iframe.contentDocument.body;
-    const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
-    document.body.removeChild(iframe);
-
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({unit:"pt", format:"letter"});
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = canvas.height * imgWidth / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
-    const TOLERANCIA = 12;
-    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-    while(heightLeft > TOLERANCIA){
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-    const pdfBlob = pdf.output("blob");
+    const pdfBlob = await renderHtmlAPdfBlob(htmlDoc, ".box");
     await guardarNotaRemisionBlob(folio.cr, pdfBlob, nrFolio(folio.cr)+".pdf");
     showToast("Nota de remisión "+nrFolio(folio.cr)+" generada");
   }catch(err){
