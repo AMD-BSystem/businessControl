@@ -697,11 +697,10 @@ const PDF_TEMPLATE = `<!DOCTYPE html>
     </div>
 
     <div style="padding:0 24px 16px 24px; font-size:12px; line-height:1.45; color:#334155; flex:1 1 auto;">
-      <p style="margin:0 0 8px 0;">Quedamos atentos a cualquier duda, ajuste o confirmación de pedido.</p>
-      <p style="margin:0;"><strong>Atentamente,</strong><br />AMD Business Services<br />{{CorreoAMD}}</p>
+      <p style="margin:0;">Quedamos atentos a cualquier duda, ajuste o confirmación de pedido.</p>
     </div>
 
-    <div style="background:#0f172a; color:#cbd5e1; padding:12px 24px; font-size:10.5px; text-align:center;">
+    <div class="pdf-footer" style="background:#0f172a; color:#cbd5e1; padding:12px 24px; font-size:10.5px; text-align:center;">
       AMD Business Services | {{CorreoAMD}} | {{TelefonoAMD}} | Querétaro, México
     </div>
   </div>
@@ -3986,6 +3985,11 @@ function evitarCortesDePagina(target, pageHeightPx){
 // con la corrección de evitarCortesDePagina() para que los bloques "no-break" no se partan
 // entre hojas. `selector` es el contenedor raíz del documento dentro de la plantilla (".page"
 // para propuestas/POs, ".box" para la nota de remisión).
+//
+// Si la plantilla trae un elemento con clase "pdf-footer" (la cintilla con los datos de AMD),
+// esa cintilla se repite igual al fondo de CADA hoja del PDF, en vez de aparecer una sola vez
+// hasta el final de todo el contenido: se saca del contenido que se "fotografía" con html2canvas
+// y se vuelve a dibujar como texto nativo de jsPDF al fondo de cada hoja que se genera.
 async function renderHtmlAPdfBlob(htmlDoc, selector){
   const iframe = document.createElement("iframe");
   iframe.style.position = "fixed";
@@ -4000,30 +4004,54 @@ async function renderHtmlAPdfBlob(htmlDoc, selector){
   });
   await new Promise(r=>setTimeout(r, 80));
   const target = iframe.contentDocument.querySelector(selector) || iframe.contentDocument.body;
-  // 612x792pt es el tamaño carta en puntos; esto da el alto de una hoja en los mismos
-  // píxeles en los que está medido "target" (antes del factor scale:2 de html2canvas).
-  const pageHeightPx = target.getBoundingClientRect().width * (792/612);
-  evitarCortesDePagina(target, pageHeightPx);
-  const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
-  document.body.removeChild(iframe);
 
-  const imgData = canvas.toDataURL("image/jpeg", 0.95);
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({unit:"pt", format:"letter"});
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
+  // 612x792pt es el tamaño carta en puntos; pxPorPt convierte entre esos puntos y los píxeles
+  // en los que está medido "target" (antes del factor scale:2 de html2canvas).
+  const pxPorPt = target.getBoundingClientRect().width / pageWidth;
+
+  const footerEl = target.querySelector(".pdf-footer");
+  let footerTexto = "", footerHeightPt = 0;
+  if(footerEl){
+    footerTexto = footerEl.textContent.replace(/\s+/g, " ").trim();
+    footerHeightPt = footerEl.getBoundingClientRect().height / pxPorPt;
+    footerEl.remove();
+  }
+  const altoContenidoPt = pageHeight - footerHeightPt; // alto útil de cada hoja, ya sin el pie de página
+  const altoContenidoPx = altoContenidoPt * pxPorPt;
+  evitarCortesDePagina(target, altoContenidoPx);
+
+  const canvas = await html2canvas(target, {scale:2, useCORS:true, backgroundColor:"#ffffff"});
+  document.body.removeChild(iframe);
+
+  function dibujarFooter(){
+    if(!footerEl) return;
+    pdf.setFillColor(15, 23, 42);
+    pdf.rect(0, altoContenidoPt, pageWidth, footerHeightPt, "F");
+    pdf.setTextColor(203, 213, 225);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    pdf.text(footerTexto, pageWidth/2, altoContenidoPt + footerHeightPt/2, {align:"center", baseline:"middle"});
+  }
+
+  const imgData = canvas.toDataURL("image/jpeg", 0.95);
   const imgWidth = pageWidth;
   const imgHeight = canvas.height * imgWidth / canvas.width;
   let heightLeft = imgHeight;
   let position = 0;
   const TOLERANCIA = 12; // pt: evita una hoja extra casi en blanco por redondeo
   pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-  heightLeft -= pageHeight;
+  dibujarFooter();
+  heightLeft -= altoContenidoPt;
   while(heightLeft > TOLERANCIA){
     position = heightLeft - imgHeight;
     pdf.addPage();
     pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
+    dibujarFooter();
+    heightLeft -= altoContenidoPt;
   }
   return pdf.output("blob");
 }
