@@ -466,6 +466,17 @@
       </div>
 
       <div class="card">
+        <h3>Retención de ISR (RESICO)</h3>
+        <p class="small muted" style="margin:0 0 10px;">Desde que AMD factura bajo el Régimen Simplificado de Confianza (RESICO), los clientes <strong>persona moral</strong> deben retener ISR sobre el subtotal sin IVA de cada factura (art. 113-J LISR), y ese monto se acredita contra el ISR de AMD. Para que aplique en una CR, además de activarlo aquí, el cliente de esa CR debe estar marcado como "Persona moral" en Clientes.</p>
+        <label class="checkbox-row"><input type="checkbox" id="cfg_retIsrActiva"> Aplicar retención de ISR a clientes persona moral</label>
+        <div class="grid-2" style="margin-top:8px;">
+          <div class="field"><label>% de retención</label><input type="number" step="0.01" id="cfg_retIsrPct"></div>
+          <div class="field"><label>Aplica a partir de <span class="hint">(CRs con fecha de solicitud anterior no se recalculan)</span></label><input type="date" id="cfg_retIsrDesde"></div>
+        </div>
+        <button class="btn btn-primary" id="btnGuardarRetencionIsr" style="margin-top:10px;">Guardar retención de ISR</button>
+      </div>
+
+      <div class="card">
         <h3>Parámetros para calcular precios</h3>
         <p class="small muted" style="margin:0 0 10px;">Método: <strong>Precio = (C + E + G) ÷ (1 − m)</strong>, donde C es el costo del artículo (campo "Costo artículo" de cada renglón), E es el costo de entrega (campo "Costo entrega"), G es el costo fijo de gestión por operación y m es el margen sobre precio. Con esto, cada renglón de una CR va a mostrar un <strong>% de ganancia sugerido</strong> (editable) junto al campo que ya existe.</p>
 
@@ -1623,6 +1634,43 @@ function costoTotalFolio(cr){ return round2(detallesDe(cr).reduce((s,d)=>s+preci
 // Lo que el cliente realmente paga: el subtotal cotizado + 16% de IVA (mismo cálculo que la propuesta en PDF).
 // El pago capturado al marcar "Pago Recibido" debe usar SIEMPRE este total, no el subtotal sin IVA.
 function costoTotalFolioConIVA(cr){ return round2(costoTotalFolio(cr) * 1.16); }
+
+/* =========================================================================
+   RETENCIÓN DE ISR (RESICO, personas físicas) — art. 113-J LISR
+   Cuando AMD (persona física en RESICO) factura a un cliente persona moral,
+   ese cliente debe retener 1.25% (configurable) sobre el SUBTOTAL sin IVA,
+   y AMD acredita esa retención contra su ISR. Solo aplica si: (1) está
+   activada en Configuración, (2) el cliente de la CR está marcado como
+   "persona moral", y (3) la CR es de fecha igual o posterior al día en que
+   se activó (para no recalcular CRs anteriores al cambio de régimen).
+   ========================================================================= */
+function asegurarRetencionIsrDefault(){
+  const r = state.config.retencionIsr || (state.config.retencionIsr = {});
+  if(r.activa===undefined || r.activa===null) r.activa = true;
+  if(r.pct===undefined || r.pct===null || r.pct==="") r.pct = 1.25;
+  if(!r.desde) r.desde = todayISO();
+  return r;
+}
+function retencionIsrAplica(folio){
+  if(!folio) return false;
+  const r = asegurarRetencionIsrDefault();
+  if(!r.activa) return false;
+  const cli = clienteById(folio.idCliente);
+  if(!cli || cli.tipoPersona!=="moral") return false;
+  if(r.desde && (folio.fechaSolicitud||"") < r.desde) return false;
+  return true;
+}
+function retencionIsrPct(){ return N(asegurarRetencionIsrDefault().pct); }
+function retencionIsrMonto(cr){
+  const folio = state.folios.find(f=>f.cr===cr);
+  if(!retencionIsrAplica(folio)) return 0;
+  return round2(costoTotalFolio(cr) * retencionIsrPct()/100);
+}
+function costoTotalFolioNeto(cr){ return round2(costoTotalFolioConIVA(cr) - retencionIsrMonto(cr)); }
+function notaRetencionIsrHtml(folio){
+  if(!retencionIsrAplica(folio)) return "";
+  return `<br><span style="color:var(--danger);">Se retiene ${retencionIsrPct()}% de ISR (RESICO, cliente persona moral): -${money(retencionIsrMonto(folio.cr))} &middot; neto a cobrar: <strong>${money(costoTotalFolioNeto(folio.cr))}</strong></span>`;
+}
 function gastosDeCR(cr){ return state.gastos.filter(g=>g.crAsignada===cr); }
 function gastosAsignadosTotal(cr){ return gastosDeCR(cr).reduce((s,g)=>s+N(g.costoTotal),0); }
 // Utilidad PLANEADA: la estimada al cotizar, con los costos capturados en cada renglón (no se mueve con los gastos reales).
@@ -1920,10 +1968,11 @@ function renderClientes(){
       <td>${c.contacto||"-"}</td>
       <td>${c.correo||"-"}</td>
       <td>${c.telefono||"-"}</td>
+      <td>${c.tipoPersona==="moral"?"Moral":c.tipoPersona==="fisica"?"Física":'<span class="muted">Sin definir</span>'}</td>
       <td class="right">${N(c.diasCredito)} días</td>
       <td class="right"><button class="btn btn-outline btn-sm" data-edit="${c.id}">Editar</button></td>
     </tr>`).join("");
-  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Empresa</th><th>Contacto</th><th>Correo</th><th>Teléfono</th><th class="right">Crédito</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<table class="tbl"><thead><tr><th>ID</th><th>Empresa</th><th>Contacto</th><th>Correo</th><th>Teléfono</th><th>Tipo de persona</th><th class="right">Crédito</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   wrap.querySelectorAll("[data-edit]").forEach(btn=>{
     btn.addEventListener("click", (e)=>{ e.stopPropagation(); abrirModalCliente(btn.dataset.edit); });
   });
@@ -1946,6 +1995,13 @@ function abrirModalCliente(id){
       <div class="field"><label>RFC</label><input id="cf_rfc" value="${cli?cli.rfc||"":""}"></div>
       <div class="field"><label>Días de crédito</label><input id="cf_credito" type="number" value="${cli?cli.diasCredito||0:0}"></div>
     </div>
+    <div class="field"><label>Tipo de persona <span class="hint">(para saber si aplica retención de ISR — RESICO)</span></label>
+      <select id="cf_tipopersona">
+        <option value="" ${(!cli||!cli.tipoPersona)?"selected":""}>Sin definir</option>
+        <option value="moral" ${cli&&cli.tipoPersona==="moral"?"selected":""}>Persona moral (empresa)</option>
+        <option value="fisica" ${cli&&cli.tipoPersona==="fisica"?"selected":""}>Persona física</option>
+      </select>
+    </div>
     <div class="field"><label>Notas</label><textarea id="cf_notas">${cli?cli.notas||"":""}</textarea></div>
     ${!cli?'<div class="note">El ID se genera solo: CL- + 3 letras de la empresa + consecutivo (ej. CL-SIE01).</div>':""}
     <div class="flex-between" style="margin-top:10px;">
@@ -1966,6 +2022,7 @@ function abrirModalCliente(id){
       direccion: document.getElementById("cf_direccion").value.trim(),
       rfc: document.getElementById("cf_rfc").value.trim(),
       diasCredito: N(document.getElementById("cf_credito").value),
+      tipoPersona: document.getElementById("cf_tipopersona").value,
       notas: document.getElementById("cf_notas").value.trim()
     };
     if(cli){ Object.assign(cli, data); } else { state.clientes.push(data); }
@@ -2278,7 +2335,8 @@ function balanceGeneral(){
   const totalIngresos = state.ingresos.reduce((s,i)=>s+N(i.monto),0);
   const totalInyecciones = state.inyecciones.reduce((s,i)=>s+N(i.monto),0);
   const totalGastos = state.gastos.reduce((s,g)=>s+N(g.costoTotal),0);
-  return { totalIngresos, totalInyecciones, totalGastos, balance: totalIngresos+totalInyecciones-totalGastos };
+  const totalRetencionIsr = state.ingresos.reduce((s,i)=>s+N(i.retencionIsr),0);
+  return { totalIngresos, totalInyecciones, totalGastos, totalRetencionIsr, balance: totalIngresos+totalInyecciones-totalGastos };
 }
 function renderBalance(){
   const b = balanceGeneral();
@@ -2287,6 +2345,7 @@ function renderBalance(){
     <div class="stat-card"><div class="label">Ingresos (CRs pagadas)</div><div class="value blue">${money(b.totalIngresos)}</div></div>
     <div class="stat-card"><div class="label">Inyecciones de capital</div><div class="value blue">${money(b.totalInyecciones)}</div></div>
     <div class="stat-card"><div class="label">Gastos totales</div><div class="value" style="color:var(--danger)">${money(b.totalGastos)}</div></div>
+    ${b.totalRetencionIsr>0 ? `<div class="stat-card"><div class="label">Retenciones ISR acumuladas <span class="hint">(RESICO, acredítalas en tu ISR)</span></div><div class="value" style="color:var(--danger)">${money(b.totalRetencionIsr)}</div></div>` : ""}
   `;
   const meses = balancePorMes();
   if(meses.length===0){
@@ -2306,7 +2365,7 @@ function renderBalance(){
   }
 
   const movimientos = [
-    ...state.ingresos.map(i=>({tipo:"Ingreso", fecha:i.fecha, concepto:i.concepto||("Pago recibido - "+i.cr), monto:N(i.monto), id:i.id})),
+    ...state.ingresos.map(i=>({tipo:"Ingreso", fecha:i.fecha, concepto:(i.concepto||("Pago recibido - "+i.cr))+(N(i.retencionIsr)>0?(" (neto; reten. ISR "+money(N(i.retencionIsr))+")"):""), monto:N(i.monto), id:i.id})),
     ...state.inyecciones.map(i=>({tipo:"Inyección", fecha:i.fecha, concepto:"Inyección de "+i.nombre+(i.notas?(" — "+i.notas):""), monto:N(i.monto), id:i.id, borrable:true})),
     ...state.gastos.map(g=>({tipo:"Gasto", fecha:g.fecha, concepto:g.concepto+(g.crAsignada?(" (asignado a "+g.crAsignada+")"):""), monto:-N(g.costoTotal)}))
   ].sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
@@ -2699,6 +2758,11 @@ function renderConfig(){
   document.getElementById("cfgMsFileLabel").textContent = (typeof excelFileRef!=="undefined" && excelFileRef) ? EXCEL_FILENAME : "Ninguno";
   document.getElementById("cfgPdfFolderLabel").textContent = pdfFolderRef ? "2_Cotizaciones (OneDrive)" : "Ninguna";
 
+  const r = asegurarRetencionIsrDefault();
+  document.getElementById("cfg_retIsrActiva").checked = !!r.activa;
+  document.getElementById("cfg_retIsrPct").value = r.pct;
+  document.getElementById("cfg_retIsrDesde").value = r.desde;
+
   const p = asegurarPreciosDefault();
   document.getElementById("cfgp_km").value = p.kmViaje;
   document.getElementById("cfgp_combustible").value = p.costoPorKm;
@@ -2756,6 +2820,15 @@ document.getElementById("btnGuardarConfig").addEventListener("click", ()=>{
   markDirty();
   showToast("Configuración guardada");
 });
+document.getElementById("btnGuardarRetencionIsr").addEventListener("click", ()=>{
+  const r = asegurarRetencionIsrDefault();
+  r.activa = document.getElementById("cfg_retIsrActiva").checked;
+  r.pct = N(document.getElementById("cfg_retIsrPct").value) || 1.25;
+  r.desde = document.getElementById("cfg_retIsrDesde").value || todayISO();
+  markDirty();
+  if(currentCR) renderDetalle();
+  showToast("Retención de ISR guardada");
+});
 document.getElementById("btnGuardarPrecios").addEventListener("click", ()=>{
   const p = asegurarPreciosDefault();
   p.kmViaje = N(document.getElementById("cfgp_km").value);
@@ -2790,6 +2863,14 @@ function renglonesDesdeCR(cr){
     tiempoEntregaValor:d.tiempoEntregaValor||"", tiempoEntregaUnidad:d.tiempoEntregaUnidad||"días",
     link:d.link||"", notas:d.notas||""
   }));
+}
+function proyectoDesdeCR(cr){
+  const d = detallesDe(cr)[0];
+  if(!d) return null;
+  return {
+    nombre:d.descripcion||"", descripcionBreve:d.descripcionBreve||"", incluye:d.incluye||"", noIncluye:d.noIncluye||"",
+    tiempoEntregaValor:d.tiempoEntregaValor||"", tiempoEntregaUnidad:d.tiempoEntregaUnidad||"días"
+  };
 }
 function abrirModalSolicitud(crOrigen){
   if(state.clientes.length===0){
@@ -2873,7 +2954,21 @@ function renderCuerpoSolicitud(){
   const wrap = document.getElementById("cuerpoSolicitudWrap");
   if(!wrap) return;
   if(tipoCotizacionTemp==="proyecto"){
+    const crsConProyecto = state.folios.filter(f=>esProyectoFolio(f) && detallesDe(f.cr).length>0);
+    const opcionesCopiarProyecto = crsConProyecto.map(f=>{
+      const c = clienteById(f.idCliente);
+      const d = detallesDe(f.cr)[0];
+      return `<option value="${f.cr}">${f.cr} — ${c?c.empresa:"(sin cliente)"}${d&&d.descripcion?" ("+d.descripcion+")":""}</option>`;
+    }).join("");
     wrap.innerHTML = `
+      ${crsConProyecto.length ? `
+      <div class="field" style="max-width:80%;">
+        <label>Copiar datos de una CR de proyecto existente <span class="hint">(opcional, reemplaza los campos de abajo; las imágenes no se copian)</span></label>
+        <div style="display:flex; gap:8px;">
+          <select id="sf_copiarProyectoDeCR" style="flex:1;"><option value="">Selecciona una CR...</option>${opcionesCopiarProyecto}</select>
+          <button class="btn btn-outline btn-sm" type="button" id="sf_btnCopiarProyecto" style="width:auto; white-space:nowrap;">Copiar datos</button>
+        </div>
+      </div>` : ""}
       <div class="field"><label>Nombre del servicio o proyecto</label><input id="pf_nombre" value="${proyectoTemp.nombre||""}"></div>
       <div class="field"><label>Descripción breve</label><textarea id="pf_descBreve">${proyectoTemp.descripcionBreve||""}</textarea></div>
       <div class="field"><label>Qué incluye</label><textarea id="pf_incluye" placeholder="Ej. Diseño, materiales, instalación, puesta en marcha...">${proyectoTemp.incluye||""}</textarea></div>
@@ -2897,6 +2992,21 @@ function renderCuerpoSolicitud(){
     document.getElementById("pf_tiempoUnidad").addEventListener("change", (e)=>{ proyectoTemp.tiempoEntregaUnidad = e.target.value; });
     if(!proyectoTemp.imagenes) proyectoTemp.imagenes = [];
     wirePegarImagenesPendientes(document.getElementById("pf_imagenesWrap"), proyectoTemp.imagenes);
+    const btnCopiarProyecto = document.getElementById("sf_btnCopiarProyecto");
+    if(btnCopiarProyecto) btnCopiarProyecto.addEventListener("click", ()=>{
+      const crSel = document.getElementById("sf_copiarProyectoDeCR").value;
+      if(!crSel){ showToast("Selecciona de qué CR quieres copiar los datos", true); return; }
+      const copiado = proyectoDesdeCR(crSel);
+      if(!copiado){ showToast("Esa CR no tiene datos de proyecto capturados", true); return; }
+      proyectoTemp.nombre = copiado.nombre;
+      proyectoTemp.descripcionBreve = copiado.descripcionBreve;
+      proyectoTemp.incluye = copiado.incluye;
+      proyectoTemp.noIncluye = copiado.noIncluye;
+      proyectoTemp.tiempoEntregaValor = copiado.tiempoEntregaValor;
+      proyectoTemp.tiempoEntregaUnidad = copiado.tiempoEntregaUnidad;
+      renderCuerpoSolicitud();
+      showToast("Se copiaron los datos del proyecto/servicio de "+crSel+" — revisa y ajusta antes de guardar.");
+    });
   } else {
     const crsConItems = state.folios.filter(f=>!esProyectoFolio(f) && detallesDe(f.cr).length>0);
     const opcionesCopiar = crsConItems.map(f=>{
@@ -3272,19 +3382,19 @@ function renderDetalle(){
       </div>`;
   } else if(folio.status==="PO Recibida"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material solicitado/comprado &rarr; Material Solicitado</button>
-                     <p class="small muted" style="margin-top:8px;">Monto a facturar al cliente (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Monto a facturar al cliente (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong>${notaRetencionIsrHtml(folio)}</p>`;
   } else if(folio.status==="Material Solicitado"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura generada &rarr; Factura Generada</button>
-                     <p class="small muted" style="margin-top:8px;">Esperando disponibilidad del material con el proveedor. Monto a facturar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Esperando disponibilidad del material con el proveedor. Monto a facturar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong>${notaRetencionIsrHtml(folio)}</p>`;
   } else if(folio.status==="Factura Generada"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar material entregado &rarr; Material Entregado</button>
-                     <p class="small muted" style="margin-top:8px;">Captura el número de factura arriba. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Captura el número de factura arriba. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong>${notaRetencionIsrHtml(folio)}</p>`;
   } else if(folio.status==="Material Entregado"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar factura enviada &rarr; Factura Enviada</button>
-                     <p class="small muted" style="margin-top:8px;">Usa "Enviar factura por correo" arriba cuando esté lista. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Usa "Enviar factura por correo" arriba cuando esté lista. Monto facturado (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong>${notaRetencionIsrHtml(folio)}</p>`;
   } else if(folio.status==="Factura Enviada"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar pago recibido &rarr; Pago Recibido</button>
-                     <p class="small muted" style="margin-top:8px;">Fecha probable de pago: <strong>${fpp?fmtDate(fpp):"captura la fecha de factura para calcularla"}</strong> (según días de crédito del cliente).<br>Monto a cobrar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong></p>`;
+                     <p class="small muted" style="margin-top:8px;">Fecha probable de pago: <strong>${fpp?fmtDate(fpp):"captura la fecha de factura para calcularla"}</strong> (según días de crédito del cliente).<br>Monto a cobrar (con IVA): <strong>${money(costoTotalFolioConIVA(folio.cr))}</strong>${notaRetencionIsrHtml(folio)}</p>`;
   } else if(folio.status==="Pago Recibido"){
     accionesHtml = `<button class="btn btn-primary" id="btnAvanzar">Marcar complemento generado &rarr; Complemento Generado</button>`;
   } else if(folio.status==="Complemento Generado"){
@@ -3381,6 +3491,10 @@ function renderDetalle(){
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente</span><span class="v money" id="costoTotalFolioDisplay">${money(totalFinal)}</span></div>
       <div class="kv"><span class="k">IVA (16%)</span><span class="v money" id="ivaTotalFolioDisplay">${money(costoTotalFolioConIVA(folio.cr) - totalFinal)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Costo total final al cliente (con IVA)</span><span class="v money" id="costoTotalConIvaFolioDisplay">${money(costoTotalFolioConIVA(folio.cr))}</span></div>
+      ${retencionIsrAplica(folio) ? `
+      <div class="kv"><span class="k">Retención ISR (${retencionIsrPct()}%, RESICO &middot; cliente persona moral)</span><span class="v money" style="color:var(--danger)">-${money(retencionIsrMonto(folio.cr))}</span></div>
+      <div class="kv" style="font-size:15px;"><span class="k">Neto a cobrar <span class="hint">(después de retención)</span></span><span class="v money" id="netoACobrarFolioDisplay">${money(costoTotalFolioNeto(folio.cr))}</span></div>
+      ` : ""}
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad planeada <span class="hint">(según costos del renglón)</span></span><span class="v money" id="utilidadPlaneadaFolioDisplay" style="color:var(--ok)">${money(utilidadPlaneada)}</span></div>
       <div class="kv" style="font-size:15px;"><span class="k">Utilidad real <span class="hint">(precio − gastos reales asignados)</span></span><span class="v money" id="utilidadRealFolioDisplay" style="color:var(--ok)">${utilidadReal}</span></div>
     </div>
@@ -3556,9 +3670,11 @@ function renderDetalle(){
         folio.status = flowNow.next;
         if(!folio.fechas[folio.status]) folio.fechas[folio.status] = todayISO();
         if(folio.status==="Pago Recibido" && !state.ingresos.some(i=>i.cr===folio.cr)){
+          const retIsr = retencionIsrMonto(folio.cr);
           state.ingresos.push({
             id: uid("IN"), cr: folio.cr, fecha: folio.fechas[folio.status],
-            concepto: "Pago recibido - "+folio.cr, monto: costoTotalFolioConIVA(folio.cr)
+            concepto: "Pago recibido - "+folio.cr, monto: round2(costoTotalFolioConIVA(folio.cr) - retIsr),
+            retencionIsr: retIsr
           });
         }
         markDirty(); renderDetalle(); renderBalance();
@@ -4690,7 +4806,7 @@ function excelSerialToISO(v){
 
 function importarWorkbook(wb){
   state = {clientes:[], folios:[], detalles:[], acciones:[], gastos:[], proveedores:[], ingresos:[], inyecciones:[], pos:[],
-    config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"", precios:{}}};
+    config:{empresaCorreo:"", empresaTelefono:"", vigencia:"15 días", formaPago:"", condicionEntrega:"", condicionesComerciales:"", precios:{}, retencionIsr:{}}};
 
   if(wb.SheetNames.includes("Clientes")){
     const {map, filas} = leerHojaPorEncabezado(wb.Sheets["Clientes"], "ID_Cliente");
@@ -4699,7 +4815,8 @@ function importarWorkbook(wb){
         id:String(col(r,map,"ID_Cliente")), empresa:col(r,map,"Empresa / Cliente","Empresa"),
         contacto:col(r,map,"Contacto Principal","Contacto"), correo:col(r,map,"Correo Principal","Correo"),
         telefono:col(r,map,"Teléfono Principal","Teléfono"), direccion:col(r,map,"Dirección"),
-        rfc:col(r,map,"RFC"), diasCredito:N(col(r,map,"Días de Crédito")), notas:col(r,map,"Notas")
+        rfc:col(r,map,"RFC"), diasCredito:N(col(r,map,"Días de Crédito")),
+        tipoPersona:col(r,map,"Tipo de Persona")||"", notas:col(r,map,"Notas")
       });
     });
   }
@@ -4806,7 +4923,7 @@ function importarWorkbook(wb){
     filas.forEach(r=>{
       state.ingresos.push({
         id:String(col(r,map,"ID")), cr:col(r,map,"CR"), fecha:excelSerialToISO(col(r,map,"Fecha")),
-        concepto:col(r,map,"Concepto"), monto:N(col(r,map,"Monto"))
+        concepto:col(r,map,"Concepto"), monto:N(col(r,map,"Monto")), retencionIsr:N(col(r,map,"Retención ISR"))
       });
     });
   }
@@ -4862,9 +4979,13 @@ function importarWorkbook(wb){
         try{ state.config.precios = valor ? JSON.parse(valor) : {}; }
         catch(err){ console.warn("No se pudo leer la configuración de precios guardada", err); }
       }
+      if(llave==="retencionIsrActiva") (state.config.retencionIsr=state.config.retencionIsr||{}).activa = (valor===true||valor==="TRUE");
+      if(llave==="retencionIsrPct") (state.config.retencionIsr=state.config.retencionIsr||{}).pct = N(valor);
+      if(llave==="retencionIsrDesde") (state.config.retencionIsr=state.config.retencionIsr||{}).desde = valor;
     });
   }
   asegurarPreciosDefault();
+  asegurarRetencionIsrDefault();
   limpiarDatosResiduales();
 }
 
@@ -4955,8 +5076,8 @@ function exportarWorkbook(){
   const wb = XLSX.utils.book_new();
 
   const clientesAoa = [
-    ["ID_Cliente","Empresa / Cliente","Contacto Principal","Correo Principal","Teléfono Principal","Dirección","RFC","Días de Crédito","Notas"],
-    ...state.clientes.map(c=>[c.id,c.empresa,c.contacto,c.correo,c.telefono,c.direccion,c.rfc,c.diasCredito,c.notas])
+    ["ID_Cliente","Empresa / Cliente","Contacto Principal","Correo Principal","Teléfono Principal","Dirección","RFC","Días de Crédito","Tipo de Persona","Notas"],
+    ...state.clientes.map(c=>[c.id,c.empresa,c.contacto,c.correo,c.telefono,c.direccion,c.rfc,c.diasCredito,c.tipoPersona||"",c.notas])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(clientesAoa), "Clientes");
 
@@ -4985,8 +5106,8 @@ function exportarWorkbook(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(provAoa), "Proveedores");
 
   const ingAoa = [
-    ["ID","CR","Fecha","Concepto","Monto"],
-    ...state.ingresos.map(i=>[i.id, i.cr, i.fecha, i.concepto, N(i.monto)])
+    ["ID","CR","Fecha","Concepto","Monto","Retención ISR"],
+    ...state.ingresos.map(i=>[i.id, i.cr, i.fecha, i.concepto, N(i.monto), N(i.retencionIsr)])
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ingAoa), "Ingresos");
 
@@ -5022,7 +5143,10 @@ function exportarWorkbook(){
     ["formaPago", state.config.formaPago||""],
     ["condicionEntrega", state.config.condicionEntrega||""],
     ["condicionesComerciales", state.config.condicionesComerciales||""],
-    ["preciosJSON", JSON.stringify(asegurarPreciosDefault())]
+    ["preciosJSON", JSON.stringify(asegurarPreciosDefault())],
+    ["retencionIsrActiva", !!asegurarRetencionIsrDefault().activa],
+    ["retencionIsrPct", N(asegurarRetencionIsrDefault().pct)],
+    ["retencionIsrDesde", asegurarRetencionIsrDefault().desde||""]
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cfgAoa), "Config");
 
